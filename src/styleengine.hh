@@ -1,15 +1,3 @@
-/*
- * File: styleengine.hh
- *
- * Copyright 2008-2009 Johannes Hofmann <Johannes.Hofmann@gmx.de>
- * Copyright 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 3 of the License, or
- * (at your option) any later version.
- */
-
 #ifndef __STYLEENGINE_HH__
 #define __STYLEENGINE_HH__
 
@@ -39,7 +27,6 @@ class StyleEngine {
          dw::core::style::Style *wordStyle;
          dw::core::style::Style *backgroundStyle;
          bool inheritBackgroundColor;
-         bool displayNone;
          DoctreeNode *doctreeNode;
       };
 
@@ -48,15 +35,9 @@ class StyleEngine {
       CssContext *cssContext;
       Doctree *doctree;
       int importDepth;
-      float dpmm;
-      float zoom;
-      DilloUrl *pageUrl, *baseUrl;
 
-      void stackPush ();
-      void stackPop ();
-      void buildUserStyle ();
-      dw::core::style::Style *style0 (int i, BrowserWindow *bw);
-      dw::core::style::Style *wordStyle0 (BrowserWindow *bw);
+      dw::core::style::Style *style0 (int i);
+      dw::core::style::Style *wordStyle0 ();
       inline void setNonCssHint(CssPropertyName name, CssValueType type,
                                 CssPropertyValue value) {
          Node *n = stack->getRef (stack->size () - 1);
@@ -67,8 +48,7 @@ class StyleEngine {
       }
       void preprocessAttrs (dw::core::style::StyleAttrs *attrs);
       void postprocessAttrs (dw::core::style::StyleAttrs *attrs);
-      void apply (int i, dw::core::style::StyleAttrs *attrs,
-                  CssPropertyList *props, BrowserWindow *bw);
+      void apply (int i, dw::core::style::StyleAttrs *attrs, CssPropertyList *props);
       bool computeValue (int *dest, CssLength value,
                          dw::core::style::Font *font);
       bool computeValue (int *dest, CssLength value,
@@ -79,16 +59,13 @@ class StyleEngine {
                                dw::core::style::Font *font);
 
    public:
-      static void init ();
-
-      StyleEngine (dw::core::Layout *layout,
-                   const DilloUrl *pageUrl, const DilloUrl *baseUrl, float zoom);
+      StyleEngine (dw::core::Layout *layout);
       ~StyleEngine ();
 
       void parse (DilloHtml *html, DilloUrl *url, const char *buf, int buflen,
                   CssOrigin origin);
-      void startElement (int tag, BrowserWindow *bw);
-      void startElement (const char *tagname, BrowserWindow *bw);
+      void startElement (int tag);
+      void startElement (const char *tagname);
       void setId (const char *id);
       const char * getId () { return doctree->top ()->id; };
       void setClass (const char *klass);
@@ -108,38 +85,27 @@ class StyleEngine {
          v.strVal = dStrdup(value);
          setNonCssHint (name, type, v);
       }
-      inline void setNonCssHint(CssPropertyName name, CssValueType type,
-                                CssLength value) {
-         CssPropertyValue v;
-         v.lenVal = value;
-         setNonCssHint (name, type, v);
-      }
       void inheritNonCssHints ();
       void clearNonCssHints ();
-      void restyle (BrowserWindow *bw);
+      void restyle ();
       void inheritBackgroundColor (); /* \todo get rid of this somehow */
-      dw::core::style::Style *backgroundStyle (BrowserWindow *bw);
+      dw::core::style::Style *backgroundStyle ();
       dw::core::style::Color *backgroundColor ();
-      dw::core::style::StyleImage *backgroundImage
-         (dw::core::style::BackgroundRepeat *bgRepeat,
-          dw::core::style::BackgroundAttachment *bgAttachment,
-          dw::core::style::Length *bgPositionX,
-          dw::core::style::Length *bgPositionY);
 
-      inline dw::core::style::Style *style (BrowserWindow *bw) {
+      inline dw::core::style::Style *style () {
          dw::core::style::Style *s = stack->getRef (stack->size () - 1)->style;
          if (s)
             return s;
          else
-            return style0 (stack->size () - 1, bw);
+            return style0 (stack->size () - 1);
       };
 
-      inline dw::core::style::Style *wordStyle (BrowserWindow *bw) {
+      inline dw::core::style::Style *wordStyle () {
          dw::core::style::Style *s = stack->getRef(stack->size()-1)->wordStyle;
          if (s)
             return s;
          else
-            return wordStyle0 (bw);
+            return wordStyle0 ();
       };
 };
 

@@ -1,35 +1,13 @@
-/*
- * Dillo Widget
- *
- * Copyright 2005-2007 Sebastian Geerken <sgeerken@dillo.org>
- * Copyright 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
-
 #ifndef __LOUT_CONTAINER_HH_
 #define __LOUT_CONTAINER_HH_
 
 #include "object.hh"
 
-namespace lout {
-
 /**
  * \brief This namespace contains a framework for container classes, which
  *    members are instances of object::Object.
  *
- * A common problem in languages without garbage collection is, where the
+ * A common problem in languanges without garbage collection is, where the
  * children belong to, and so, who is responsible to delete them (instantiation
  * is always done by the caller). This information is here told to the
  * collections, each container has a constructor with the parameter
@@ -37,6 +15,8 @@ namespace lout {
  *
  * \sa container::untyped, container::typed
  */
+namespace lout {
+
 namespace container {
 
 /**
@@ -113,7 +93,6 @@ class Collection: public Collection0
 public:
    void intoStringBuffer(misc::StringBuffer *sb);
    inline Iterator iterator() { Iterator it(createIterator()); return it; }
-   virtual int size() = 0;
 };
 
 
@@ -123,24 +102,10 @@ public:
  */
 class Vector: public Collection
 {
-   friend class VectorIterator;
-
 private:
    object::Object **array;
    int numAlloc, numElements;
    bool ownerOfObjects;
-
-   class VectorIterator: public AbstractIterator
-   {
-   private:
-      Vector *vector;
-      int index;
-
-   public:
-      VectorIterator(Vector *vector) { this->vector = vector; index = -1; }
-      bool hasNext();
-      Object *getNext();
-   };
 
 protected:
    AbstractIterator* createIterator();
@@ -149,34 +114,14 @@ public:
    Vector(int initSize, bool ownerOfObjects);
    ~Vector();
 
-   int size();
-
    void put(object::Object *newElement, int newPos = -1);
    void insert(object::Object *newElement, int pos);
-
-   /**
-    * \brief Insert into an already sorted vector.
-    *
-    * Notice that insertion is not very efficient, unless the position
-    * is rather at the end.
-    */
-   inline int insertSorted(object::Object *newElement,
-                           object::Comparator *comparator =
-                           &object::standardComparator)
-   { int pos = bsearch (newElement, false, comparator);
-      insert (newElement, pos); return pos; }
-
    void remove(int pos);
-   inline object::Object *get(int pos) const
+   inline object::Object *get(int pos)
    { return (pos >= 0 && pos < numElements) ? array[pos] : NULL; }
+   inline int size() { return numElements; }
    void clear();
-   void sort(object::Comparator *comparator = &object::standardComparator);
-   int bsearch(Object *key, bool mustExist, int start, int end,
-               object::Comparator *comparator = &object::standardComparator);
-   inline int bsearch(Object *key, bool mustExist,
-                      object::Comparator *comparator =
-                      &object::standardComparator)
-   { return bsearch (key, mustExist, 0, size () - 1, comparator); }
+   void sort();
 };
 
 
@@ -218,103 +163,62 @@ public:
    List(bool ownerOfObjects);
    ~List();
 
-   bool equals(Object *other);
-   int hashValue();
-
-   int size ();
-
    void clear();
    void append(object::Object *element);
-   bool insertBefore(object::Object *beforeThis, object::Object *neew);
    inline bool removeRef(object::Object *element)
    { return remove0(element, false, false); }
    inline bool remove(object::Object *element)
    { return remove0(element, true, false); }
    inline bool detachRef(object::Object *element)
    { return remove0(element, false, true); }
-   inline int size() const { return numElements; }
-   inline bool isEmpty() const { return numElements == 0; }
-   inline object::Object *getFirst() const { return first->object; }
-   inline object::Object *getLast() const { return last->object; }
+   inline int size() { return numElements; }
+   inline bool isEmpty() { return numElements == 0; }
+   inline object::Object *getFirst() { return first->object; }
+   inline object::Object *getLast() { return last->object; }
 };
 
 
 /**
- * \brief A hash set.
+ * \brief A hash table.
  */
-class HashSet: public Collection
+class HashTable: public Collection
 {
-   friend class HashSetIterator;
-
-protected:
-   struct Node
-   {
-      object::Object *object;
-      Node *next;
-      virtual ~Node() {};
-   };
-
-   Node **table;
-   int tableSize, numElements;
-   bool ownerOfObjects;
-
-   inline int calcHashValue(object::Object *object) const
-   {
-      return abs(object->hashValue()) % tableSize;
-   }
-
-   virtual Node *createNode();
-   virtual void clearNode(Node *node);
-
-   Node *findNode(object::Object *object) const;
-   Node *insertNode(object::Object *object);
-
-   AbstractIterator* createIterator();
+   friend class HashTableIterator;
 
 private:
-   class HashSetIterator: public Collection0::AbstractIterator
+   struct Node
+   {
+      object::Object *key, *value;
+      Node *next;
+   };
+
+   class HashTableIterator: public Collection0::AbstractIterator
    {
    private:
-      HashSet *set;
-      HashSet::Node *node;
+      HashTable *table;
+      HashTable::Node *node;
       int pos;
 
       void gotoNext();
 
    public:
-      HashSetIterator(HashSet *set);
+      HashTableIterator(HashTable *table);
       bool hasNext();
       Object *getNext();
    };
 
-public:
-   HashSet(bool ownerOfObjects, int tableSize = 251);
-   ~HashSet();
+   Node **table;
+   int tableSize;
+   bool ownerOfKeys, ownerOfValues;
 
-   int size ();
-
-   void put (object::Object *object);
-   bool contains (object::Object *key) const;
-   bool remove (object::Object *key);
-   //Object *getReference (object::Object *object);
-};
-
-/**
- * \brief A hash table.
- */
-class HashTable: public HashSet
-{
 private:
-   bool ownerOfValues;
-
-   struct KeyValuePair: public Node
+   inline int calcHashValue(object::Object *key)
    {
-      object::Object *value;
-   };
+      return abs(key->hashValue()) % tableSize;
+   }
 
 protected:
-   Node *createNode();
-   void clearNode(Node *node);
+   AbstractIterator* createIterator();
 
 public:
    HashTable(bool ownerOfKeys, bool ownerOfValues, int tableSize = 251);
@@ -323,12 +227,14 @@ public:
    void intoStringBuffer(misc::StringBuffer *sb);
 
    void put (object::Object *key, object::Object *value);
-   object::Object *get (object::Object *key) const;
+   bool contains (object::Object *key);
+   Object *get (object::Object *key);
+   bool remove (object::Object *key);
+   Object *getKey (Object *key);
 };
 
 /**
- * \brief A stack (LIFO). Can be used as Queue (FIFO) when pushUnder()
- *     is used instead of push().
+ * \brief A stack (LIFO).
  *
  * Note that the iterator returns all elements in the reversed order they have
  * been put on the stack.
@@ -366,13 +272,11 @@ public:
    Stack (bool ownerOfObjects);
    ~Stack();
 
-   int size ();
-
    void push (object::Object *object);
    void pushUnder (object::Object *object);
-   inline object::Object *getTop () const { return top ? top->object : NULL; }
+   inline object::Object *getTop () { return top ? top->object : NULL; }
    void pop ();
-   inline int size() const { return numElements; }
+   inline int size() { return numElements; }
 };
 
 } // namespace untyped
@@ -424,19 +328,11 @@ protected:
    untyped::Collection *base;
 
 public:
-   Collection () { this->base = NULL; }
-   ~Collection () { if (this->base) delete this->base; }
-
-   bool equals(Object *other)
-   { return this->base->equals (((Collection<T>*)other)->base); }
-
-   int hashValue() { return this->base->hashValue (); }
-
    void intoStringBuffer(misc::StringBuffer *sb)
    { this->base->intoStringBuffer(sb); }
+
    inline Iterator<T> iterator() {
       Iterator<T> it; it.base = this->base->iterator(); return it; }
-   inline int size() { return this->base->size (); }
 };
 
 
@@ -448,33 +344,18 @@ template <class T> class Vector: public Collection <T>
 public:
    inline Vector(int initSize, bool ownerOfObjects) {
       this->base = new untyped::Vector(initSize, ownerOfObjects); }
+   ~Vector() { delete this->base; }
 
    inline void put(T *newElement, int newPos = -1)
    { ((untyped::Vector*)this->base)->put(newElement, newPos); }
    inline void insert(T *newElement, int pos)
    { ((untyped::Vector*)this->base)->insert(newElement, pos); }
-   inline int insertSorted(T *newElement,
-                           object::Comparator *comparator =
-                           &object::standardComparator)
-   { return ((untyped::Vector*)this->base)->insertSorted(newElement,
-                                                         comparator); }
    inline void remove(int pos) { ((untyped::Vector*)this->base)->remove(pos); }
-   inline T *get(int pos) const
+   inline T *get(int pos)
    { return (T*)((untyped::Vector*)this->base)->get(pos); }
+   inline int size() { return ((untyped::Vector*)this->base)->size(); }
    inline void clear() { ((untyped::Vector*)this->base)->clear(); }
-   inline void sort(object::Comparator *comparator =
-                    &object::standardComparator)
-   { ((untyped::Vector*)this->base)->sort(comparator); }
-   inline int bsearch(T *key, bool mustExist, int start, int end,
-                      object::Comparator *comparator =
-                      &object::standardComparator)
-   { return ((untyped::Vector*)this->base)->bsearch(key, mustExist, start, end,
-                                                    comparator); }
-   inline int bsearch(T *key, bool mustExist,
-                      object::Comparator *comparator =
-                      &object::standardComparator)
-   { return ((untyped::Vector*)this->base)->bsearch(key, mustExist,
-                                                    comparator); }
+   inline void sort() { ((untyped::Vector*)this->base)->sort(); }
 };
 
 
@@ -486,12 +367,11 @@ template <class T> class List: public Collection <T>
 public:
    inline List(bool ownerOfObjects)
    { this->base = new untyped::List(ownerOfObjects); }
+   ~List() { delete this->base; }
 
    inline void clear() { ((untyped::List*)this->base)->clear(); }
    inline void append(T *element)
    { ((untyped::List*)this->base)->append(element); }
-   inline bool insertBefore(object::Object *beforeThis, object::Object *neew)
-   { return ((untyped::List*)this->base)->insertBefore(beforeThis, neew); }
    inline bool removeRef(T *element) {
       return ((untyped::List*)this->base)->removeRef(element); }
    inline bool remove(T *element) {
@@ -499,50 +379,37 @@ public:
    inline bool detachRef(T *element) {
       return ((untyped::List*)this->base)->detachRef(element); }
 
-   inline bool isEmpty() const
+   inline int size() { return ((untyped::List*)this->base)->size(); }
+   inline bool isEmpty()
    { return ((untyped::List*)this->base)->isEmpty(); }
-   inline T *getFirst() const
+   inline T *getFirst()
    { return (T*)((untyped::List*)this->base)->getFirst(); }
-   inline T *getLast() const
+   inline T *getLast()
    { return (T*)((untyped::List*)this->base)->getLast(); }
 };
 
-/**
- * \brief Typed version of container::untyped::HashSet.
- */
-template <class T> class HashSet: public Collection <T>
-{
-protected:
-   inline HashSet() { }
-
-public:
-   inline HashSet(bool owner, int tableSize = 251)
-   { this->base = new untyped::HashSet(owner, tableSize); }
-
-   inline void put(T *object)
-   { return ((untyped::HashSet*)this->base)->put(object); }
-   inline bool contains(T *object) const
-   { return ((untyped::HashSet*)this->base)->contains(object); }
-   inline bool remove(T *object)
-   { return ((untyped::HashSet*)this->base)->remove(object); }
-   //inline T *getReference(T *object)
-   //{ return (T*)((untyped::HashSet*)this->base)->getReference(object); }
-};
 
 /**
  * \brief Typed version of container::untyped::HashTable.
  */
-template <class K, class V> class HashTable: public HashSet <K>
+template <class K, class V> class HashTable: public Collection <K>
 {
 public:
    inline HashTable(bool ownerOfKeys, bool ownerOfValues, int tableSize = 251)
    { this->base = new untyped::HashTable(ownerOfKeys, ownerOfValues,
                                          tableSize); }
+   ~HashTable() { delete this->base; }
 
    inline void put(K *key, V *value)
    { return ((untyped::HashTable*)this->base)->put(key, value); }
-   inline V *get(K *key) const
+   inline bool contains(K *key)
+   { return ((untyped::HashTable*)this->base)->contains(key); }
+   inline V *get(K *key)
    { return (V*)((untyped::HashTable*)this->base)->get(key); }
+   inline bool remove(K *key)
+   { return ((untyped::HashTable*)this->base)->remove(key); }
+   inline K *getKey(K *key)
+   { return (K*)((untyped::HashTable*)this->base)->getKey(key); }
 };
 
 /**
@@ -553,14 +420,16 @@ template <class T> class Stack: public Collection <T>
 public:
    inline Stack (bool ownerOfObjects)
    { this->base = new untyped::Stack (ownerOfObjects); }
+   ~Stack() { delete this->base; }
 
    inline void push (T *object) {
       ((untyped::Stack*)this->base)->push (object); }
    inline void pushUnder (T *object)
    { ((untyped::Stack*)this->base)->pushUnder (object); }
-   inline T *getTop () const
+   inline T *getTop ()
    { return (T*)((untyped::Stack*)this->base)->getTop (); }
    inline void pop () { ((untyped::Stack*)this->base)->pop (); }
+   inline int size() {  return ((untyped::Stack*)this->base)->size(); }
 };
 
 } // namespace untyped

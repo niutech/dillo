@@ -11,7 +11,7 @@ class FltkResource;
 
 } // namespace ui
 } // namespace fltk
-} // namespace dw
+} // namespace core
 
 #include <FL/Fl_Widget.H>
 
@@ -19,17 +19,6 @@ class FltkResource;
 #include "fltkimgbuf.hh"
 #include "fltkplatform.hh"
 #include "fltkui.hh"
-
-namespace dw {
-namespace fltk {
-
-inline void freeall ()
-{
-   FltkImgbuf::freeall ();
-}
-
-} // namespace fltk
-} // namespace dw
 
 #undef __INCLUDED_FROM_DW_FLTK_CORE_HH__
 

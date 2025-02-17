@@ -17,6 +17,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+
+
 #include "identity.hh"
 
 #include <stdio.h>
@@ -39,22 +41,6 @@ IdentifiableObject::Class::Class (IdentifiableObject::Class *parent, int id,
    this->className = className;
 }
 
-void IdentifiableObject::Class::intoStringBuffer(misc::StringBuffer *sb)
-{
-   sb->append ("<class ");
-   sb->append (className);
-   sb->append (" (");
-   sb->appendInt (id);
-   sb->append (")");
-
-   if (parent) {
-      sb->append (", parent: ");
-      parent->intoStringBuffer (sb);
-   }
-
-   sb->append (">");
-}
-
 HashTable <ConstString, IdentifiableObject::Class>
    *IdentifiableObject::classesByName =
       new HashTable<ConstString, IdentifiableObject::Class> (true, true);
@@ -69,9 +55,7 @@ IdentifiableObject::IdentifiableObject ()
 
 void IdentifiableObject::intoStringBuffer(misc::StringBuffer *sb)
 {
-   sb->append("<instance ");
-   sb->appendPointer(this);
-   sb->append(" of ");
+   sb->append("<instance of ");
    sb->append(getClassName());
    sb->append(">");
 }
@@ -94,7 +78,6 @@ void IdentifiableObject::registerName (const char *className, int *classId)
    }
 
    this->classId = klass->id;
-   *classId = klass->id;
    currentlyConstructedClass = klass;
 }
 
@@ -113,7 +96,7 @@ bool IdentifiableObject::instanceOf (int otherClassId)
 
    if (otherClass == NULL) {
       fprintf (stderr,
-               "WARNING: Something got wrong here, it seems that a "
+               "WARNING: Something got wrong here, it seems that a "
                "CLASS_ID was not initialized properly.\n");
       return false;
    }

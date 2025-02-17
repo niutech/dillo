@@ -20,7 +20,6 @@
 
 
 #include "listitem.hh"
-#include "../lout/debug.hh"
 #include <stdio.h>
 
 namespace dw {
@@ -30,19 +29,12 @@ int ListItem::CLASS_ID = -1;
 ListItem::ListItem (ListItem *ref, bool limitTextWidth):
    AlignedTextblock (limitTextWidth)
 {
-   DBG_OBJ_CREATE ("dw::ListItem");
    registerName ("dw::ListItem", &CLASS_ID);
    setRefTextblock (ref);
 }
 
 ListItem::~ListItem()
 {
-   DBG_OBJ_DELETE ();
-}
-
-bool ListItem::usesMaxGeneratorWidth ()
-{
-   return true;
 }
 
 void ListItem::initWithWidget (core::Widget *widget,
@@ -74,7 +66,7 @@ int ListItem::getValue ()
 
 void ListItem::setMaxValue (int maxValue, int value)
 {
-   leftInnerPadding = maxValue;
+   innerPadding = maxValue;
    line1Offset = - value;
    redrawY = 0;
    queueResize (0, true);

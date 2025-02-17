@@ -2,7 +2,7 @@
  * File: ui.cc
  *
  * Copyright (C) 2005-2007 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
+ * Copyright 2012 Benjamin Johnson <obeythepenguin@users.sourceforge.net>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -10,20 +10,18 @@
  * (at your option) any later version.
  */
 
-/** @file
- * UI for Dillo
- */
+// UI for Dillo
 
 #include <unistd.h>
 #include <stdio.h>
-#include <math.h>      /* rint */
 
 #include "keys.hh"
 #include "ui.hh"
 #include "msg.h"
 #include "timeout.hh"
 #include "utf8.hh"
-#include "tipwin.hh"
+#include "misc.h"
+#include "../widgets/input.hh"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Pixmap.H>
@@ -33,14 +31,12 @@
 // Include image data
 #include "pixmaps.h"
 #include "uicmd.hh"
-#include "history.h"
-#include "nav.h"
 
 struct iconset {
    Fl_Image *ImgMeterOK, *ImgMeterBug,
-            *ImgHome, *ImgReload, *ImgSave, *ImgBook, *ImgTools,
-            *ImgClear,*ImgSearch, *ImgHelp, *ImgLeft, *ImgLeftIn,
-            *ImgRight, *ImgRightIn, *ImgStop, *ImgStopIn;
+            *ImgHome, *ImgReload, *ImgBook, *ImgTools,
+            *ImgHelp, *ImgLeft, *ImgLeftIn, *ImgRight, *ImgRightIn,
+            *ImgStop, *ImgStopIn;
 };
 
 static struct iconset standard_icons = {
@@ -48,18 +44,15 @@ static struct iconset standard_icons = {
    new Fl_Pixmap(mini_bug_xpm),
    new Fl_Pixmap(home_xpm),
    new Fl_Pixmap(reload_xpm),
-   new Fl_Pixmap(save_xpm),
    new Fl_Pixmap(bm_xpm),
    new Fl_Pixmap(tools_xpm),
-   new Fl_Pixmap(new_s_xpm),
-   new Fl_Pixmap(search_xpm),
    new Fl_Pixmap(help_xpm),
    new Fl_Pixmap(left_xpm),
-   NULL,
+   new Fl_Pixmap(left_i_xpm),
    new Fl_Pixmap(right_xpm),
-   NULL,
+   new Fl_Pixmap(right_i_xpm),
    new Fl_Pixmap(stop_xpm),
-   NULL,
+   new Fl_Pixmap(stop_i_xpm),
 };
 
 static struct iconset small_icons = {
@@ -67,18 +60,15 @@ static struct iconset small_icons = {
    standard_icons.ImgMeterBug,
    new Fl_Pixmap(home_s_xpm),
    new Fl_Pixmap(reload_s_xpm),
-   new Fl_Pixmap(save_s_xpm),
    new Fl_Pixmap(bm_s_xpm),
    new Fl_Pixmap(tools_s_xpm),
-   new Fl_Pixmap(new_s_xpm),
-   standard_icons.ImgSearch,
    standard_icons.ImgHelp,
    new Fl_Pixmap(left_s_xpm),
-   NULL,
+   new Fl_Pixmap(left_si_xpm),
    new Fl_Pixmap(right_s_xpm),
-   NULL,
+   new Fl_Pixmap(right_si_xpm),
    new Fl_Pixmap(stop_s_xpm),
-   NULL,
+   new Fl_Pixmap(stop_si_xpm),
 };
 
 
@@ -90,19 +80,18 @@ static struct iconset *icons = &standard_icons;
 
 //----------------------------------------------------------------------------
 
-/**
- * Used to avoid certain shortcuts in the location bar
+/*
+ * (Used to avoid certain shortcuts in the location bar)
  */
-class CustInput : public TipWinInput {
+class CustInput : public D_Input {
 public:
    CustInput (int x, int y, int w, int h, const char* l=0) :
-      TipWinInput(x,y,w,h,l) {};
-   virtual int handle(int e);
+      D_Input(x,y,w,h,l) {};
+   int handle(int e);
 };
 
-/**
- * Disable keys: Up, Down, Page_Up, Page_Down, Tab and
- * CTRL+{o,r,Home,End}  SHIFT+{Left,Right}.
+/*
+ * Disable keys: Up, Down, Page_Up, Page_Down, Tab and CTRL+{o,r,Home,End}
  */
 int CustInput::handle(int e)
 {
@@ -118,79 +107,80 @@ int CustInput::handle(int e)
        (k == FL_Up || k == FL_Down || k == FL_Left || k == FL_Right)) {
       return 0;
    } else if (e == FL_KEYBOARD) {
-      if (k == FL_Escape && modifier == 0) {
-         // Let the parent group handle this Esc key
-         return 0;
-      } else if (modifier == FL_SHIFT) {
-         if (k == FL_Left || k == FL_Right) {
-            // Let these keys get to the UI
-            return 0;
-         }
-      } else if (modifier == FL_CTRL) {
-         if (k == 'a' || k == 'e') {
-            position(k == 'a' ? 0 : size());
-            return 1;
-         } else if (k == 'k') {
-            cut(position(), size());
-            return 1;
-         } else if (k == 'd') {
-            cut(position(), position()+1);
-            return 1;
-         } else if (k == 'l') {
-            // Make text selected when already focused.
-            position(size(), 0);
-            return 1;
-         } else if (k == 'h' || k == 'o' || k == 'r' ||
-                    k == FL_Home || k == FL_End) {
+      if (modifier == FL_CTRL) {
+         if (k == 'h' || k == 'o' || k == 'r' ||
+                    k == 'l' || k == FL_Home || k == FL_End) {
             // Let these keys get to the UI
             return 0;
          }
       } else if (modifier == 0) {
-         if (k == FL_Down || k == FL_Up ||
+         if (k == FL_Down) {
+            // Display the bookmarks menu (a handy shortcut!)
+            a_UIcmd_book(a_UIcmd_get_bw_by_widget(this), this);
+         } else if (k == FL_Escape || k == FL_Up ||
              k == FL_Page_Down || k == FL_Page_Up || k == FL_Tab) {
             // Give up focus and honor the key
             a_UIcmd_focus_main_area(a_UIcmd_get_bw_by_widget(this));
             return 0;
          }
       }
-      if (k == FL_Page_Down || k == FL_Page_Up) {
-         // These do nothing of interest when FL_MULTILINE_INPUT isn't set.
-         // Let them through for key commands.
-         return 0;
-      }
    }
 
-   return TipWinInput::handle(e);
+   return D_Input::handle(e);
 }
 
 //----------------------------------------------------------------------------
 
-/**
- * Used to handle "paste" within the toolbar's Clear button.
+/*
+ * (Used to display the right-click menu in the search bar)
  */
-class CustPasteButton : public CustButton {
+class SearchInput : public CustInput {
 public:
-   CustPasteButton(int x, int y, int w, int h, const char *l=0) :
-      CustButton(x,y,w,h,l) {};
+   SearchInput (int x, int y, int w, int h, const char* l=0) :
+      CustInput(x,y,w,h,l) {};
    int handle(int e);
 };
 
-int CustPasteButton::handle(int e)
+/*
+ * Handle focus, unfocus, and right-click events in the search bar
+ */
+int SearchInput::handle(int e)
 {
-   if (e == FL_PASTE) {
-      const char* t = Fl::event_text();
-      if (t && *t) {
-         a_UIcmd_set_location_text(a_UIcmd_get_bw_by_widget(this), t);
-         a_UIcmd_open_urlstr(a_UIcmd_get_bw_by_widget(this), t);
-         return 1;
-      }
+   void *wid = (void*)this;
+   int k = Fl::event_key();
+
+   if (e == FL_FOCUS && k == FL_Tab) {
+      // Let this event go to the UI
+      return 0;
+
+   } else if (e == FL_KEYBOARD && k == FL_Down) {
+      // Display the list of search engines
+      a_UIcmd_search_popup(a_UIcmd_get_bw_by_widget(wid), wid);
+      return 1;
+
+   } else if (e == FL_UNFOCUS &&
+              (!strlen(value()) || textcolor() == FL_INACTIVE_COLOR)) {
+      // If empty, display the name of the selected search engine
+      char *label, *url, *source;
+      source = (char *)dList_nth_data(prefs.search_urls,
+                                      prefs.search_url_idx);
+      a_Misc_parse_search_url(source, &label, &url);
+
+      value(label);
+      textcolor(FL_INACTIVE_COLOR);
+
+   } else if (e == FL_FOCUS && textcolor() == FL_INACTIVE_COLOR) {
+      // Clear the name of the selected search engine (see above)
+      value(NULL);
+      textcolor(FL_FOREGROUND_COLOR);
    }
-   return CustButton::handle(e);
+
+   return CustInput::handle(e);
 }
 
 //----------------------------------------------------------------------------
 
-/**
+/*
  * Used to resize the progress boxes automatically.
  */
 class CustProgressBox : public Fl_Box {
@@ -209,6 +199,23 @@ public:
    }
 };
 
+//----------------------------------------------------------------------------
+
+/*
+ * Used to draw a frame around the render area widget.
+ */
+class CustRenderFrame : public Fl_Group
+{
+public:
+   CustRenderFrame(int x, int y, int w, int h, const char *l=0) :
+      Fl_Group(x, y, w, h, l) { box(FL_DOWN_FRAME); };
+   void resize(int x, int y, int w, int h) {
+      Fl_Group::resize(x, y, w, h);
+      if (resizable())
+         resizable()->resize(x+2, y+2, w-4, h-4);
+   }
+};
+
 //
 // Toolbar buttons -----------------------------------------------------------
 //
@@ -222,39 +229,16 @@ public:
 // Callback functions --------------------------------------------------------
 //
 
-/**
- * Callback for the search button.
- */
-static void search_cb(Fl_Widget *wid, void *data)
-{
-   int b = Fl::event_button();
-
-   if (b == FL_LEFT_MOUSE) {
-      a_UIcmd_search_dialog(a_UIcmd_get_bw_by_widget(wid));
-   }
-}
-
-/**
+/*
  * Callback for the help button.
  */
 static void help_cb(Fl_Widget *w, void *)
 {
-   char *path = dStrconcat(DILLO_DOCDIR, "user_help.html", NULL);
    BrowserWindow *bw = a_UIcmd_get_bw_by_widget(w);
-
-   if (access(path, R_OK) == 0) {
-      char *urlstr = dStrconcat("file:", path, NULL);
-      a_UIcmd_open_urlstr(bw, urlstr);
-      dFree(urlstr);
-   } else {
-      MSG("Can't read local help file at \"%s\"."
-          " Getting remote help...\n", path);
-      a_UIcmd_open_urlstr(bw, "https://dillo-browser.github.io/user_help.html");
-   }
-   dFree(path);
+   a_UIcmd_help(bw);
 }
 
-/**
+/*
  * Callback for the File menu button.
  */
 static void filemenu_cb(Fl_Widget *wid, void *)
@@ -265,23 +249,20 @@ static void filemenu_cb(Fl_Widget *wid, void *)
    }
 }
 
-/**
- * Callback for the location's clear-button.
+/*
+ * Callback for the Search menu button.
  */
-static void clear_cb(Fl_Widget *w, void *data)
+static void searchmenu_cb(Fl_Widget *, void *v_wid)
 {
-   UI *ui = (UI*)data;
-
    int b = Fl::event_button();
-   if (b == FL_LEFT_MOUSE) {
-      ui->set_location("");
-      ui->focus_location();
-   } else if (b == FL_MIDDLE_MOUSE) {
-      ui->paste_url();
+   Fl_Widget *wid = (Fl_Widget*)v_wid;
+   if (b == FL_LEFT_MOUSE || b == FL_RIGHT_MOUSE) {
+      wid->take_focus();
+      a_UIcmd_search_popup(a_UIcmd_get_bw_by_widget(wid), wid);
    }
 }
 
-/**
+/*
  * Send the browser to the new URL in the location.
  */
 static void location_cb(Fl_Widget *wid, void *data)
@@ -296,8 +277,23 @@ static void location_cb(Fl_Widget *wid, void *data)
       ui->panels_toggle();
 }
 
+/*
+ * Perform a web search.
+ */
+static void search_cb(Fl_Widget *wid, void *data)
+{
+   Fl_Input *i = (Fl_Input*)wid;
+   UI *ui = (UI*)data;
 
-/**
+   _MSG("search_cb()\n");
+   a_UIcmd_open_search(a_UIcmd_get_bw_by_widget(i), i->value());
+
+   if (ui->temporaryPanels())
+      ui->panels_toggle();
+}
+
+
+/*
  * Callback handler for button press on the panel
  */
 static void b1_cb(Fl_Widget *wid, void *cb_data)
@@ -313,16 +309,14 @@ static void b1_cb(Fl_Widget *wid, void *cb_data)
       if (b == FL_LEFT_MOUSE) {
          a_UIcmd_back(a_UIcmd_get_bw_by_widget(wid));
       } else if (b == FL_RIGHT_MOUSE) {
-         a_UIcmd_back_popup(a_UIcmd_get_bw_by_widget(wid), wid->x(),
-                            wid->y() + wid->h());
+         a_UIcmd_back_popup(a_UIcmd_get_bw_by_widget(wid));
       }
       break;
    case UI_FORW:
       if (b == FL_LEFT_MOUSE) {
          a_UIcmd_forw(a_UIcmd_get_bw_by_widget(wid));
       } else if (b == FL_RIGHT_MOUSE) {
-         a_UIcmd_forw_popup(a_UIcmd_get_bw_by_widget(wid), wid->x(),
-                            wid->y() + wid->h());
+         a_UIcmd_forw_popup(a_UIcmd_get_bw_by_widget(wid));
       }
       break;
    case UI_HOME:
@@ -335,11 +329,6 @@ static void b1_cb(Fl_Widget *wid, void *cb_data)
          a_UIcmd_reload(a_UIcmd_get_bw_by_widget(wid));
       }
       break;
-   case UI_SAVE:
-      if (b == FL_LEFT_MOUSE) {
-         a_UIcmd_save(a_UIcmd_get_bw_by_widget(wid));
-      }
-      break;
    case UI_STOP:
       if (b == FL_LEFT_MOUSE) {
          a_UIcmd_stop(a_UIcmd_get_bw_by_widget(wid));
@@ -347,13 +336,14 @@ static void b1_cb(Fl_Widget *wid, void *cb_data)
       break;
    case UI_BOOK:
       if (b == FL_LEFT_MOUSE) {
-         a_UIcmd_book(a_UIcmd_get_bw_by_widget(wid));
+         a_UIcmd_book(a_UIcmd_get_bw_by_widget(wid), wid);
       }
       break;
    case UI_TOOLS:
-      if (b == FL_LEFT_MOUSE || b == FL_RIGHT_MOUSE) {
-         a_UIcmd_tools(a_UIcmd_get_bw_by_widget(wid), wid->x(),
-                       wid->y() + wid->h());
+      if (b == FL_LEFT_MOUSE) {
+         a_UIcmd_preferences(a_UIcmd_get_bw_by_widget(wid));
+      } else if (b == FL_RIGHT_MOUSE) {
+         a_UIcmd_tools(a_UIcmd_get_bw_by_widget(wid), wid);
       }
       break;
    default:
@@ -361,7 +351,15 @@ static void b1_cb(Fl_Widget *wid, void *cb_data)
    }
 }
 
-/**
+/*
+ * Callback for the zoom slider.
+ */
+static void zoom_cb(Fl_Widget *wid, void *data)
+{
+   a_UIcmd_zoom(a_UIcmd_get_bw_by_widget(wid), ((Fl_Slider*)wid)->value());
+}
+
+/*
  * Callback for the bug meter button.
  */
 static void bugmeter_cb(Fl_Widget *wid, void *data)
@@ -382,16 +380,16 @@ static void bugmeter_cb(Fl_Widget *wid, void *data)
 // Panel construction methods
 //----------------------------
 
-/**
+/*
  * Make a generic navigation button
  */
-CustButton *UI::make_button(const char *label, Fl_Image *img, Fl_Image *deimg,
-                            int b_n, int start)
+Fl_Button *UI::make_button(const char *label, Fl_Image *img, Fl_Image *deimg,
+                           int b_n, int start)
 {
    if (start)
       p_xpos = 0;
 
-   CustButton *b = new CustButton(p_xpos, 0, bw, bh, (lbl) ? label : NULL);
+   Fl_Button *b = new FlatLightButton(p_xpos, 0, bw, bh, (lbl) ? label : NULL);
    if (img)
       b->image(img);
    if (deimg)
@@ -399,125 +397,112 @@ CustButton *UI::make_button(const char *label, Fl_Image *img, Fl_Image *deimg,
    b->callback(b1_cb, INT2VOIDP(b_n));
    b->clear_visible_focus();
    b->labelsize(12);
-   b->box(FL_FLAT_BOX);
-   b->down_box(FL_THIN_DOWN_FRAME);
    p_xpos += bw;
    return b;
 }
 
-/**
+/*
  * Create the archetipic browser buttons
  */
 void UI::make_toolbar(int tw, int th)
 {
-   if (!icons->ImgLeftIn) {
-      icons->ImgLeftIn = icons->ImgLeft->copy();
-      icons->ImgLeftIn->desaturate();
-      icons->ImgLeftIn->color_average(FL_BACKGROUND_COLOR, .14f);
-   }
-   if (!icons->ImgRightIn) {
-      icons->ImgRightIn = icons->ImgRight->copy();
-      icons->ImgRightIn->desaturate();
-      icons->ImgRightIn->color_average(FL_BACKGROUND_COLOR, .14f);
-   }
-   if (!icons->ImgStopIn) {
-      icons->ImgStopIn = icons->ImgStop->copy();
-      icons->ImgStopIn->desaturate();
-      icons->ImgStopIn->color_average(FL_BACKGROUND_COLOR, .14f);
-   }
    Back = make_button("Back", icons->ImgLeft, icons->ImgLeftIn, UI_BACK, 1);
    Forw = make_button("Forw", icons->ImgRight, icons->ImgRightIn, UI_FORW);
    Home = make_button("Home", icons->ImgHome, NULL, UI_HOME);
    Reload = make_button("Reload", icons->ImgReload, NULL, UI_RELOAD);
-   Save = make_button("Save", icons->ImgSave, NULL, UI_SAVE);
    Stop = make_button("Stop", icons->ImgStop, icons->ImgStopIn, UI_STOP);
    Bookmarks = make_button("Book", icons->ImgBook, NULL, UI_BOOK);
-   Tools = make_button("Tools", icons->ImgTools, NULL, UI_TOOLS);
+   Tools = make_button("Prefs", icons->ImgTools, NULL, UI_TOOLS);
 
-   Back->set_tooltip("Previous page");
-   Forw->set_tooltip("Next page");
-   Home->set_tooltip("Go to the Home page");
-   Reload->set_tooltip("Reload");
-   Save->set_tooltip("Save this page");
-   Stop->set_tooltip("Stop loading");
-   Bookmarks->set_tooltip("View bookmarks");
-   Tools->set_tooltip("Settings");
+   Back->tooltip("Back");
+   Forw->tooltip("Forward");
+   Home->tooltip("Home");
+   Reload->tooltip("Reload");
+   Stop->tooltip("Stop");
+   Bookmarks->tooltip("Bookmarks");
+   Tools->tooltip("Preferences");
 }
 
-/**
- * Create the location box (Clear/Input/Search)
+/*
+ * Create the location box (Input/Search)
  */
 void UI::make_location(int ww)
 {
-   CustButton *b;
+   Fl_Button *b;
 
-    b = Clear = (CustButton*) new CustPasteButton(p_xpos,0,16,lh,0);
-    b->image(icons->ImgClear);
-    b->callback(clear_cb, this);
-    b->clear_visible_focus();
-    b->box(FL_THIN_UP_BOX);
-    b->set_tooltip("Clear the URL box.\nMiddle-click to paste a URL.");
-    p_xpos += b->w();
+    Fl_Input *i = Location = new CustInput(p_xpos,0,ww-p_xpos-192,lh,0);
+    i->box(FL_THIN_DOWN_BOX);
+    i->when(FL_WHEN_ENTER_KEY);
+    i->callback(location_cb, this);
+    p_xpos += i->w();
 
-    LocationGroup = new Fl_Group(p_xpos,0,ww-p_xpos-32,lh,0);
-    LocationGroup->begin();
-     CustInput *i = new CustInput(p_xpos,0,ww-p_xpos-32,lh,0);
-     Location = i;
+    // This is essentially a custom version of Fl_Input_Choice.
+    // (Using the real thing here would require considerably more work)
+    SearchBar = new CustGroupHorizontal(p_xpos,0,176,lh);
+    SearchBar->box(FL_THIN_DOWN_FRAME);
+    SearchBar->begin();
+
+     i = Search = new SearchInput(p_xpos+1,1,SearchBar->w()-lh,lh-2,0);
+     i->box(FL_FLAT_BOX);
      i->when(FL_WHEN_ENTER_KEY);
-     i->callback(location_cb, this);
-     i->set_tooltip("Location");
-     i->textsize((int) rint(14.0 * prefs.font_factor));
+     i->callback(search_cb, this);
      p_xpos += i->w();
-    LocationGroup->box(FL_THIN_UP_BOX);   // or FL_FLAT_BOX
-    LocationGroup->end();
+ 
+     SearchButton = b = new CustLightButton(p_xpos+1,1,lh-2,lh-2,0);
+     b->label("@-32>");
+     b->callback(searchmenu_cb, Search);
+     b->clear_visible_focus();
+     b->box(FL_THIN_UP_BOX);
+     p_xpos += b->w();
 
-    Search = b = new CustButton(p_xpos,0,16,lh,0);
-    b->image(icons->ImgSearch);
-    b->callback(search_cb, this);
-    b->clear_visible_focus();
-    b->box(FL_THIN_UP_BOX);
-    b->set_tooltip("Search the Web");
-    p_xpos += b->w();
+    SearchBar->end();
 
-    Help = b = new CustButton(p_xpos,0,16,lh,0);
+    Help = b = new CustLightButton(p_xpos,0,16,lh,0);
     b->image(icons->ImgHelp);
     b->callback(help_cb, this);
     b->clear_visible_focus();
     b->box(FL_THIN_UP_BOX);
-    b->set_tooltip("Help");
+    b->tooltip("Help");
     p_xpos += b->w();
+
+    // Reset this to its unfocused state
+    // (displaying the name of the default search engine)
+    Search->handle(FL_UNFOCUS);
 
 }
 
-/**
+/*
  * Create the progress bars
  */
-void UI::make_progress_bars(int wide, int thin_up)
+void UI::make_progress_bars()
 {
     // Images
     IProg = new CustProgressBox(p_xpos,p_ypos,pw,bh);
     IProg->labelsize(12);
-    IProg->box(thin_up ? FL_THIN_UP_BOX : FL_EMBOSSED_BOX);
-    IProg->update_label(wide ? "Images\n0 of 0" : "0 of 0");
+    IProg->box(FL_FLAT_BOX);
+    IProg->tooltip(PanelSize == P_medium ? "" : "Images");
+    IProg->update_label(PanelSize == P_medium ?
+                        "Images\n0 of 0" : "I: 0 of 0");
     p_xpos += pw;
     // Page
     PProg = new CustProgressBox(p_xpos,p_ypos,pw,bh);
     PProg->labelsize(12);
-    PProg->box(thin_up ? FL_THIN_UP_BOX : FL_EMBOSSED_BOX);
-    PProg->update_label(wide ? "Page\n0.0 KB" : "0.0 KB");
+    PProg->box(FL_FLAT_BOX);
+    PProg->tooltip(PanelSize == P_medium ? "" : "Page");
+    PProg->update_label(PanelSize == P_medium ?
+                        "Page\n0.0 KB" : "P: 0.0 KB");
 }
 
-/**
- * Create the "File" menu.
+/*
+ * Create the "File" menu
  * Static function for File menu callbacks.
  */
-void UI::make_filemenu_button()
+Fl_Widget *UI::make_filemenu_button()
 {
-   CustButton *btn;
+   Fl_Button *btn;
    int w = 0, h = 0, padding;
 
-   FileButton = btn = new CustButton(p_xpos,0,bw,bh,"W");
-   btn->labeltype(FL_FREE_LABELTYPE);
+   FileButton = btn = new FlatLightButton(p_xpos,0,bw,bh,"W");
    btn->measure_label(w, h);
    padding = w;
    btn->copy_label(PanelSize == P_tiny ? "&F" : "&File");
@@ -526,16 +511,15 @@ void UI::make_filemenu_button()
    btn->size(w+padding, h);
    p_xpos += btn->w();
    _MSG("UI::make_filemenu_button w=%d h=%d padding=%d\n", w, h, padding);
-   btn->box(FL_THIN_UP_BOX);
    btn->callback(filemenu_cb, this);
-   btn->set_tooltip("File menu");
    btn->clear_visible_focus();
    if (!prefs.show_filemenu)
       btn->hide();
+   return btn;
 }
 
 
-/**
+/*
  * Create the control panel
  */
 void UI::make_panel(int ww)
@@ -553,17 +537,17 @@ void UI::make_panel(int ww)
       if (Small_Icons)
          bw = 22, bh = 22, mh = 0, lh = 22, lbl = 0;
       else
-         bw = 28, bh = 28, mh = 0, lh = 28, lbl = 0;
+         bw = 28, bh = 28, mh = 0, lh = 22, lbl = 0;
    } else if (PanelSize == P_small) {
       if (Small_Icons)
-         bw = 20, bh = 20, mh = 0, lh = 20, lbl = 0;
+         bw = 20, bh = 20, mh = 0, lh = 22, lbl = 0;
       else
-         bw = 28, bh = 28, mh = 0, lh = 28, lbl = 0;
+         bw = 28, bh = 28, mh = 0, lh = 22, lbl = 0;
    } else if (PanelSize == P_medium) {
       if (Small_Icons)
          bw = 42, bh = 36, mh = 0, lh = 22, lbl = 1;
       else
-         bw = 45, bh = 45, mh = 0, lh = 28, lbl = 1;
+         bw = 45, bh = 45, mh = 0, lh = 22, lbl = 1;
    }
    nh = bh, fh = 28; sh = 20;
 
@@ -575,9 +559,8 @@ void UI::make_panel(int ww)
        make_toolbar(ww,bh);
        make_filemenu_button();
        make_location(ww);
-       NavBar->resizable(LocationGroup);
-       make_progress_bars(0,1);
-      NavBar->box(FL_THIN_UP_FRAME);
+       NavBar->resizable(Location);
+       make_progress_bars();
       NavBar->end();
       NavBar->rearrange();
       TopGroup->insert(*NavBar,0);
@@ -589,7 +572,7 @@ void UI::make_panel(int ww)
         p_xpos = 0;
         make_filemenu_button();
         make_location(ww);
-        LocBar->resizable(LocationGroup);
+        LocBar->resizable(Location);
        LocBar->end();
        LocBar->rearrange();
        TopGroup->insert(*LocBar,0);
@@ -604,18 +587,14 @@ void UI::make_panel(int ww)
         w->box(FL_FLAT_BOX);
         NavBar->resizable(w);
         p_xpos = ww - 2*pw;
-        if (PanelSize == P_small) {
-           make_progress_bars(0,0);
-        } else {
-           make_progress_bars(1,0);
-        }
+        make_progress_bars();
        NavBar->end();
        NavBar->rearrange();
        TopGroup->insert(*NavBar,1);
    }
 }
 
-/**
+/*
  * Create the status panel
  */
 void UI::make_status_bar(int ww, int wh)
@@ -625,19 +604,28 @@ void UI::make_status_bar(int ww, int wh)
    StatusBar->box(FL_NO_BOX);
 
     // Status box
-    StatusOutput = new Fl_Output(0, wh-sh, ww-bm_w, sh);
-    StatusOutput->value("https://dillo-browser.github.io/");
-    StatusOutput->labelsize(8);
+    StatusOutput = new CustOutput(0, wh-sh, ww-bm_w, sh);
+    StatusOutput->labelsize(FL_NORMAL_SIZE - 2);
     StatusOutput->box(FL_THIN_DOWN_BOX);
     StatusOutput->clear_visible_focus();
-    StatusOutput->color(FL_BACKGROUND_COLOR);
+
+    // Zoom
+    Zoom = new Fl_Hor_Slider(ww-bm_w,wh-sh,bm_w,sh);
+    Zoom->box(FL_THIN_DOWN_BOX);
+    Zoom->size(64, Zoom->h());
+    Zoom->value(prefs.font_factor);
+    Zoom->bounds(0.0,10.0);
+    Zoom->step(0.1);
+    Zoom->tooltip("Zoom");
+    Zoom->callback(zoom_cb);
+    Zoom->clear_visible_focus();
 
     // Bug Meter
-    BugMeter = new CustButton(ww-bm_w,wh-sh,bm_w,sh);
+    BugMeter = new CustLightButton(ww-bm_w,wh-sh,bm_w,sh);
     BugMeter->image(icons->ImgMeterOK);
     BugMeter->box(FL_THIN_DOWN_BOX);
     BugMeter->align(FL_ALIGN_INSIDE | FL_ALIGN_TEXT_NEXT_TO_IMAGE);
-    BugMeter->set_tooltip("Show HTML bugs\n(right-click for menu)");
+    BugMeter->tooltip("Show HTML bugs\n(right-click for menu)");
     BugMeter->callback(bugmeter_cb, this);
     BugMeter->clear_visible_focus();
 
@@ -646,7 +634,7 @@ void UI::make_status_bar(int ww, int wh)
    StatusBar->rearrange();
 }
 
-/**
+/*
  * User Interface constructor
  */
 UI::UI(int x, int y, int ui_w, int ui_h, const char* label, const UI *cur_ui) :
@@ -655,6 +643,7 @@ UI::UI(int x, int y, int ui_w, int ui_h, const char* label, const UI *cur_ui) :
    LocBar = NavBar = StatusBar = NULL;
 
    Tabs = NULL;
+   TabTooltip = NULL;
    TopGroup = this;
    TopGroup->box(FL_NO_BOX);
    clear_flag(SHORTCUT_LABEL);
@@ -696,22 +685,23 @@ UI::UI(int x, int y, int ui_w, int ui_h, const char* label, const UI *cur_ui) :
    TopGroup->end();
    TopGroup->rearrange();
 
-   customize();
+   customize(0);
 
    if (Panelmode == UI_HIDDEN) {
       panels_toggle();
    }
 }
 
-/**
+/*
  * UI destructor
  */
 UI::~UI()
 {
    _MSG("UI::~UI()\n");
+   dFree(TabTooltip);
 }
 
-/**
+/*
  * FLTK event handler for this window.
  */
 int UI::handle(int event)
@@ -720,13 +710,22 @@ int UI::handle(int event)
 
    int ret = 0;
    if (event == FL_KEYBOARD) {
+      /* WORKAROUND: remove the Panel's fltk-tooltip.
+       * Although the expose event is delivered, it has an offset. This
+       * extra call avoids the lingering tooltip. */
+      if (!Fl::event_inside(Main) &&
+          (Fl::event_inside((Fl_Widget*)tabs()) ||
+           Fl::event_inside(NavBar) ||
+           (LocBar && Fl::event_inside(LocBar)) ||
+           (StatusBar && Fl::event_inside(StatusBar))))
+         window()->damage(FL_DAMAGE_EXPOSE,0,0,1,1);
+
       return 0; // Receive as shortcut
    } else if (event == FL_SHORTCUT) {
       KeysCommand_t cmd = Keys::getKeyCmd();
       if (cmd == KEYS_NOP) {
          // Do nothing
       } else if (cmd == KEYS_SCREEN_UP || cmd == KEYS_SCREEN_DOWN ||
-                 cmd == KEYS_SCREEN_LEFT || cmd == KEYS_SCREEN_RIGHT ||
                  cmd == KEYS_LINE_UP || cmd == KEYS_LINE_DOWN ||
                  cmd == KEYS_LEFT || cmd == KEYS_RIGHT ||
                  cmd == KEYS_TOP || cmd == KEYS_BOTTOM) {
@@ -738,35 +737,46 @@ int UI::handle(int event)
       } else if (cmd == KEYS_FORWARD) {
          a_UIcmd_forw(a_UIcmd_get_bw_by_widget(this));
          ret = 1;
-      } else if (cmd == KEYS_ZOOM_IN) {
-         a_UIcmd_zoom_in(a_UIcmd_get_bw_by_widget(this));
-         ret = 1;
-      } else if (cmd == KEYS_ZOOM_OUT) {
-         a_UIcmd_zoom_out(a_UIcmd_get_bw_by_widget(this));
-         ret = 1;
-      } else if (cmd == KEYS_ZOOM_RESET) {
-         a_UIcmd_zoom_reset(a_UIcmd_get_bw_by_widget(this));
-         ret = 1;
       } else if (cmd == KEYS_BOOKMARKS) {
-         a_UIcmd_book(a_UIcmd_get_bw_by_widget(this));
+         a_UIcmd_book(a_UIcmd_get_bw_by_widget(this), Bookmarks);
+         ret = 1;
+      } else if (cmd == KEYS_ADD_BOOKMARK) {
+         a_UIcmd_add_bookmark_from_vbw(a_UIcmd_get_bw_by_widget(this));
+         ret = 1;
+      } else if (cmd == KEYS_COPY) {
+         a_UIcmd_copy(a_UIcmd_get_bw_by_widget(this));
          ret = 1;
       } else if (cmd == KEYS_FIND) {
          findbar_toggle(1);
          ret = 1;
       } else if (cmd == KEYS_WEBSEARCH) {
-         a_UIcmd_search_dialog(a_UIcmd_get_bw_by_widget(this));
+         if (Panelmode == UI_HIDDEN) {
+            panels_toggle();
+            temporaryPanels(true);
+         }
+         if (prefs.show_search)
+            focus_search();
          ret = 1;
       } else if (cmd == KEYS_GOTO) {
-         focus_location();
+         if (Panelmode == UI_HIDDEN) {
+            panels_toggle();
+            temporaryPanels(true);
+         }
+         if (prefs.show_url)
+            focus_location();
          ret = 1;
       } else if (cmd == KEYS_HIDE_PANELS) {
-         /* Hide findbar if present, hide panels if not */
-         (FindBar->visible()) ? findbar_toggle(0) : panels_toggle();
+         panels_toggle();
          temporaryPanels(false);
          ret = 1;
       } else if (cmd == KEYS_OPEN) {
          a_UIcmd_open_file(a_UIcmd_get_bw_by_widget(this));
          ret = 1;
+#ifdef ENABLE_PRINTER
+      } else if (cmd == KEYS_PRINT) {
+         a_UIcmd_print_page(a_UIcmd_get_bw_by_widget(this));
+         ret = 1;
+#endif /* ENABLE_PRINTER */
       } else if (cmd == KEYS_HOME) {
          a_UIcmd_home(a_UIcmd_get_bw_by_widget(this));
          ret = 1;
@@ -780,21 +790,21 @@ int UI::handle(int event)
          a_UIcmd_save(a_UIcmd_get_bw_by_widget(this));
          ret = 1;
       } else if (cmd == KEYS_FILE_MENU) {
-         a_UIcmd_file_popup(a_UIcmd_get_bw_by_widget(this), FileButton);
+         if (prefs.show_filemenu)
+            a_UIcmd_file_popup(a_UIcmd_get_bw_by_widget(this), FileButton);
+         ret = 1;
+      } else if (cmd == KEYS_HELP) {
+         a_UIcmd_help(a_UIcmd_get_bw_by_widget(this));
          ret = 1;
       } else if (cmd == KEYS_VIEW_SOURCE) {
-         BrowserWindow *bw = a_UIcmd_get_bw_by_widget(this);
-         const DilloUrl *url = a_History_get_url(NAV_TOP_UIDX(bw));
-         a_UIcmd_view_page_source(bw, url);
+         a_UIcmd_view_page_source(a_UIcmd_get_bw_by_widget(this), NULL);
          ret = 1;
       }
-   } else if (event == FL_RELEASE) {
-      if (Fl::event_button() == FL_MIDDLE_MOUSE &&
-          prefs.middle_click_drags_page == 0) {
-         /* nobody claimed the event; try paste */
-         paste_url();
-         ret = 1;
-      }
+   } else if (event == FL_SHOW) {
+      // Make sure the search box shows the selected search engine
+      // in case we changed it in another tab.
+      if (Fl::focus() != Search)
+         Search->handle(FL_UNFOCUS);
    }
 
    if (!ret) {
@@ -814,7 +824,7 @@ int UI::handle(int event)
 // API for the User Interface
 //----------------------------
 
-/**
+/*
  * Get the text from the location input-box.
  */
 const char *UI::get_location()
@@ -822,32 +832,39 @@ const char *UI::get_location()
    return Location->value();
 }
 
-/**
+/*
  * Set a new URL in the location input-box.
  */
 void UI::set_location(const char *str)
 {
    if (!str) str = "";
    Location->value(str);
-   Location->position((Fl::focus() == Location) ? strlen(str) : 0);
+   Location->position(strlen(str));
 }
 
-/**
+/*
  * Focus location entry.
  * If it's not visible, show it until the callback is done.
  */
 void UI::focus_location()
 {
-   if (Panelmode == UI_HIDDEN) {
-      panels_toggle();
-      temporaryPanels(true);
-   }
    Location->take_focus();
    // Make text selected when already focused.
    Location->position(Location->size(), 0);
 }
 
-/**
+/*
+ * Focus search entry.
+ * If it's not visible, show it until the callback is done.
+ */
+void UI::focus_search()
+{
+   Search->take_focus();
+   // Make text selected when already focused.
+   Search->position(Search->size(), 0);
+}
+
+/*
  * Focus Main area.
  */
 void UI::focus_main()
@@ -855,16 +872,17 @@ void UI::focus_main()
    Main->take_focus();
 }
 
-/**
+/*
  * Set a new message in the status bar.
  */
 void UI::set_status(const char *str)
 {
-   StatusOutput->value(str);
+   if (str != NULL)
+      StatusOutput->value(str);
 }
 
-/**
- * Set the page progress text.
+/*
+ * Set the page progress text
  * cmd: 0 Deactivate, 1 Update, 2 Clear
  */
 void UI::set_page_prog(size_t nbytes, int cmd)
@@ -876,18 +894,8 @@ void UI::set_page_prog(size_t nbytes, int cmd)
    } else {
       PProg->activate();
       if (cmd == 1) {
-         char prefix;
-         float magnitude;
-
-         if (nbytes >= 1024 * 1024) {
-            prefix = 'M';
-            magnitude = nbytes / (1024 * 1024.0);
-         } else {
-            prefix = 'K';
-            magnitude = nbytes / 1024.0;
-         }
-         snprintf(str, 32, "%s%.1f %cB",
-                  (PanelSize == 0) ? "" : "Page\n", magnitude, prefix);
+         snprintf(str, 32, "%s%.1f KB",
+                  (PanelSize == P_medium) ? "Page\n" : "P: ", nbytes/1024.0);
       } else if (cmd == 2) {
          str[0] = '\0';
       }
@@ -895,8 +903,8 @@ void UI::set_page_prog(size_t nbytes, int cmd)
    }
 }
 
-/**
- * Set the image progress text.
+/*
+ * Set the image progress text
  * cmd: 0 Deactivate, 1 Update, 2 Clear
  */
 void UI::set_img_prog(int n_img, int t_img, int cmd)
@@ -909,7 +917,7 @@ void UI::set_img_prog(int n_img, int t_img, int cmd)
       IProg->activate();
       if (cmd == 1) {
          snprintf(str, 32, "%s%d of %d",
-                  (PanelSize == 0) ? "" : "Images\n", n_img, t_img);
+                  (PanelSize == P_medium) ? "Images\n" : "I: ", n_img, t_img);
       } else if (cmd == 2) {
          str[0] = '\0';
       }
@@ -917,7 +925,7 @@ void UI::set_img_prog(int n_img, int t_img, int cmd)
    }
 }
 
-/**
+/*
  * Set the bug meter progress text
  */
 void UI::set_bug_prog(int n_bug)
@@ -939,11 +947,13 @@ void UI::set_bug_prog(int n_bug)
    StatusBar->rearrange();
 }
 
-/**
+/*
  * Customize the UI's panel (show/hide buttons)
  */
-void UI::customize()
+void UI::customize(int flags)
 {
+   // flags argument not currently used
+
    if ( !prefs.show_back )
       Back->hide();
    if ( !prefs.show_forw )
@@ -952,22 +962,20 @@ void UI::customize()
       Home->hide();
    if ( !prefs.show_reload )
       Reload->hide();
-   if ( !prefs.show_save )
-      Save->hide();
    if ( !prefs.show_stop )
       Stop->hide();
    if ( !prefs.show_bookmarks )
       Bookmarks->hide();
    if ( !prefs.show_tools )
       Tools->hide();
-   if ( !prefs.show_clear_url )
-      Clear->hide();
    if ( !prefs.show_url )
       Location->hide();
    if ( !prefs.show_search )
-      Search->hide();
+      SearchBar->hide();
    if ( !prefs.show_help )
       Help->hide();
+   if ( !prefs.show_zoom )
+      Zoom->hide();
    if ( !prefs.show_progress_box ) {
       IProg->hide();
       PProg->hide();
@@ -979,13 +987,11 @@ void UI::customize()
       LocBar->rearrange();
 }
 
-/**
+/*
  * On-the-fly panel style change
  */
 void UI::change_panel(int new_size, int small_icons)
 {
-   char *loc_text = dStrdup(Location->value());
-
    // Remove current panel's bars
    init_sizes();
    TopGroup->remove(LocBar);
@@ -998,34 +1004,39 @@ void UI::change_panel(int new_size, int small_icons)
    PanelSize = new_size;
    Small_Icons = small_icons;
 
+   prefs.panel_size = PanelSize;
+   prefs.small_icons = Small_Icons;
+
    // make a new panel
    make_panel(TopGroup->w());
-   customize();
+   customize(0);
    a_UIcmd_set_buttons_sens(a_UIcmd_get_bw_by_widget(this));
 
    TopGroup->rearrange();
-   Location->value(loc_text);
    Location->take_focus();
-
-   dFree(loc_text);
 }
 
-/**
+/*
  * Set 'nw' as the main render area widget
  */
 void UI::set_render_layout(Fl_Group *nw)
 {
-   // Resize layout widget to current height
-   nw->resize(0,Main->y(),Main->w(),Main->h());
+   CustRenderFrame *f = new CustRenderFrame(0,0,0,1);
+   f->end();
+   f->add(nw);
+   f->resizable(nw);
 
-   TopGroup->insert(*nw, Main);
+   // Resize layout widget to current height
+   f->resize(0,Main->y(),Main->w(),Main->h());
+
+   TopGroup->insert(*f, Main);
    remove(Main);
    delete(Main);
-   Main = nw;
+   Main = f;
    TopGroup->resizable(Main);
 }
 
-/**
+/*
  * Set button sensitivity (Back/Forw/Stop)
  */
 void UI::button_set_sens(UIButton btn, int sens)
@@ -1045,15 +1056,7 @@ void UI::button_set_sens(UIButton btn, int sens)
    }
 }
 
-/**
- * Paste a middle-click-selection into "Clear" button as URL
- */
-void UI::paste_url()
-{
-   Fl::paste(*Clear, false);
-}
-
-/**
+/*
  * Adjust space for the findbar (if necessary) and show or remove it
  */
 void UI::findbar_toggle(bool add)
@@ -1081,7 +1084,7 @@ void UI::findbar_toggle(bool add)
    TopGroup->rearrange();
 }
 
-/**
+/*
  * Make panels disappear growing the render area.
  * WORKAROUND: here we avoid hidden widgets resize by setting their
  *             size to (0,0) while hidden.
@@ -1102,8 +1105,8 @@ void UI::panels_toggle()
       hide ? NavBar->hide() : NavBar->show();
    }
    if (StatusBar) {
-      hide ? StatusBar->size(0,0) : StatusBar->size(w(),sh);
-      hide ? StatusBar->hide() : StatusBar->show();
+      hide ? StatusBar->size(0,0) : StatusBar->size(w(),sh);;
+      hide ? StatusBar->hide() : StatusBar->show();;
       StatusBar->rearrange();
    }
 

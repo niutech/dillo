@@ -1,17 +1,40 @@
-doc_DATA = user_help.html
-man_MANS = dillo.1
+man_MANS = dplus.1
 EXTRA_DIST = \
-	README \
-	Cookies.txt \
-	dillo.1.in \
-	user_help.in.html \
-	install.md
-
-dillo.1: $(srcdir)/dillo.1.in Makefile
-	sed 's%/usr/local%${prefix}%g' < $(srcdir)/dillo.1.in > dillo.1
-
-# Use .in.html instead of .html.in so it is recognized as HTML.
-user_help.html: $(srcdir)/user_help.in.html Makefile
-	sed 's/__VERSION__/${VERSION}/g' $(srcdir)/user_help.in.html > $@
-
-DISTCLEANFILES = dillo.1 user_help.html
+        $(man_MANS) \
+	index.doc \
+	lout.doc \
+	dw-map.doc \
+	dw-overview.doc \
+	dw-usage.doc \
+	dw-layout-views.doc \
+	dw-layout-widgets.doc \
+	dw-widget-sizes.doc \
+	dw-changes.doc \
+	dw-images-and-backgrounds.doc \
+	fltk-problems.doc \
+	rounding-errors.doc \
+	uml-legend.doc \
+	dw-example-screenshot.png \
+	dw-viewport-without-scrollbar.png \
+	dw-viewport-with-scrollbar.png \
+	dw-size-of-widget.png \
+	dw-style-box-model.png \
+	dw-style-length-absolute.png \
+	dw-style-length-percentage.png \
+	dw-style-length-relative.png \
+	dw-textblock-collapsing-spaces-1-1.png \
+	dw-textblock-collapsing-spaces-1-2.png \
+	dw-textblock-collapsing-spaces-2-1.png \
+	dw-textblock-collapsing-spaces-2-2.png \
+        Cache.txt \
+        Cookies.txt \
+        Dillo.txt \
+        Dw.txt \
+        HtmlParser.txt \
+        IO.txt \
+        Images.txt \
+        Imgbuf.txt \
+        NC_design.txt \
+        Selection.txt \
+        Dpid.txt \
+        README

@@ -2,7 +2,7 @@
  * Preferences
  *
  * Copyright (C) 2006-2009 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
+ * Copyright (C) 2010 Benjamin Johnson <obeythepenguin@users.sourceforge.net>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,41 +13,58 @@
 #include "prefs.h"
 
 #define PREFS_START_PAGE      "about:splash"
-#define PREFS_HOME            "https://dillo-browser.github.io/"
-#define PREFS_NEW_TAB_PAGE    "about:blank"
-#define PREFS_FONT_SERIF      "DejaVu Serif"
-#define PREFS_FONT_SANS_SERIF "DejaVu Sans"
-#define PREFS_FONT_CURSIVE    "DejaVu Sans"
-#define PREFS_FONT_FANTASY    "DejaVu Sans" /* TODO: find good default */
-#define PREFS_FONT_MONOSPACE  "DejaVu Sans Mono"
-#define PREFS_SEARCH_URL      "dd http://duckduckgo.com/lite/?kp=-1&kd=-1&q=%s"
+#define PREFS_HOME            "http://dplus-browser.sourceforge.net/"
 #define PREFS_NO_PROXY        "localhost 127.0.0.1"
-#define PREFS_SAVE_DIR        "/tmp/"
 #define PREFS_HTTP_REFERER    "host"
-#define PREFS_HTTP_USER_AGENT "Dillo/" VERSION
-#define PREFS_THEME           "none"
+#define PREFS_DATE_FORMAT     "%m/%d/%Y %I:%M%p"
+  
+#ifndef _WIN32
+#  define PREFS_FONT_SERIF      "DejaVu Serif"
+#  define PREFS_FONT_SANS_SERIF "DejaVu Sans"
+#  define PREFS_FONT_CURSIVE    "URW Chancery L"
+#  define PREFS_FONT_FANTASY    "DejaVu Sans" /* TODO: find good default */
+#  define PREFS_FONT_MONOSPACE  "DejaVu Sans Mono"
+#else /* _WIN32 */
+#  define PREFS_FONT_SERIF      "Times New Roman"
+#  define PREFS_FONT_SANS_SERIF "Arial"
+#  define PREFS_FONT_CURSIVE    "Lucida Calligraphy"
+#  define PREFS_FONT_FANTASY    "Comic Sans MS"
+#  define PREFS_FONT_MONOSPACE  "Courier New"
+#endif /* _WIN32 */
+
+/* Most sites don't recognize DPlus's user agent string, but many will
+ * recognize Mozilla/4.0 and generate simpler HTML code (e.g., Google). */
+#define PREFS_HTTP_USER_AGENT "Mozilla/4.0 (compatible; DPlus " VERSION ")"
 
 /*-----------------------------------------------------------------------------
  * Global Data
  *---------------------------------------------------------------------------*/
 DilloPrefs prefs;
 
-/**
+/*
  * Sets the default settings.
  */
 
 void a_Prefs_init(void)
 {
    prefs.allow_white_bg = TRUE;
-   prefs.white_bg_replacement = 0xe0e0a3; // 0xdcd1ba;
-   prefs.bg_color = 0xdcd1ba;
-   prefs.buffered_drawing = 1;
+   prefs.always_show_tabs = TRUE;
+   prefs.bookmarks_file = NULL;  /* only set if we intend to override */
+   prefs.bg_color = 0xffffff;
+   prefs.buffered_drawing = 2;
    prefs.contrast_visited_color = TRUE;
+   prefs.date_format = dStrdup(PREFS_DATE_FORMAT);
    prefs.enterpress_forces_submit = FALSE;
+
+   /* PREFS_FILTER_SAME_DOMAIN is the mainline default,
+    * but it makes the vast majority of sites unusable,
+    * including Wikipedia, Google, SourceForge, etc. */
+   prefs.filter_auto_requests = PREFS_FILTER_ALLOW_ALL;
+
    prefs.focus_new_tab = FALSE;
    prefs.font_cursive = dStrdup(PREFS_FONT_CURSIVE);
+   prefs.font_default_serif = FALSE;
    prefs.font_factor = 1.0;
-   prefs.zoom_factor = 1.0;
    prefs.font_max_size = 100;
    prefs.font_min_size = 6;
    prefs.font_fantasy = dStrdup(PREFS_FONT_FANTASY);
@@ -66,86 +83,72 @@ void a_Prefs_init(void)
    prefs.http_language = NULL;
    prefs.http_proxy = NULL;
    prefs.http_max_conns = 6;
-   prefs.http_persistent_conns = TRUE;
    prefs.http_proxyuser = NULL;
    prefs.http_referer = dStrdup(PREFS_HTTP_REFERER);
-   prefs.http_strict_transport_security = TRUE;
-   prefs.http_force_https = FALSE;
    prefs.http_user_agent = dStrdup(PREFS_HTTP_USER_AGENT);
    prefs.limit_text_width = FALSE;
-   prefs.adjust_min_width = TRUE;
-   prefs.adjust_table_min_width = TRUE;
    prefs.load_images=TRUE;
-   prefs.ignore_image_formats = NULL;
-   prefs.load_background_images=FALSE;
    prefs.load_stylesheets=TRUE;
    prefs.middle_click_drags_page = TRUE;
    prefs.middle_click_opens_new_tab = TRUE;
-   prefs.right_click_closes_tab = TRUE;
-   prefs.scroll_switches_tabs = TRUE;
-   prefs.scroll_switches_tabs_reverse = FALSE;
+   prefs.right_click_closes_tab = FALSE;
    prefs.no_proxy = dStrdup(PREFS_NO_PROXY);
-   prefs.link_actions = dList_new(16);
-   prefs.panel_size = P_medium;
+   prefs.panel_size = P_tiny;
    prefs.parse_embedded_css=TRUE;
-   prefs.save_dir = dStrdup(PREFS_SAVE_DIR);
-   prefs.scroll_step = 100;
-   prefs.scroll_page_overlap = 50;
    prefs.search_urls = dList_new(16);
-   dList_append(prefs.search_urls, dStrdup(PREFS_SEARCH_URL));
    prefs.search_url_idx = 0;
-   prefs.scrollbar_on_left = FALSE;
-   prefs.scrollbar_page_mode = FALSE;
    prefs.show_back = TRUE;
    prefs.show_bookmarks = TRUE;
-   prefs.show_clear_url = TRUE;
    prefs.show_extra_warnings = FALSE;
-   prefs.show_filemenu=TRUE;
+   prefs.show_filemenu = FALSE;
    prefs.show_forw = TRUE;
-   prefs.show_help = TRUE;
+   prefs.show_help = FALSE;
    prefs.show_home = TRUE;
    prefs.show_msg = TRUE;
-   prefs.show_progress_box = TRUE;
-   prefs.show_quit_dialog = FALSE;
+   prefs.show_progress_box = FALSE;
+   prefs.show_quit_dialog = TRUE;
    prefs.show_reload = TRUE;
-   prefs.show_save = TRUE;
-   prefs.show_url = TRUE;
    prefs.show_search = TRUE;
    prefs.show_stop = TRUE;
    prefs.show_tools = TRUE;
    prefs.show_tooltip = TRUE;
-   prefs.show_ui_tooltip = TRUE;
+   prefs.show_url = TRUE;
+   prefs.show_zoom = TRUE;
    prefs.small_icons = FALSE;
    prefs.start_page = a_Url_new(PREFS_START_PAGE, NULL);
-   prefs.new_tab_page = a_Url_new(PREFS_NEW_TAB_PAGE, NULL);
-   prefs.theme = dStrdup(PREFS_THEME);
-   prefs.ui_button_highlight_color = -1;
-   prefs.ui_fg_color = -1;
-   prefs.ui_main_bg_color = -1;
-   prefs.ui_selection_color = -1;
-   prefs.ui_tab_active_bg_color = -1;
-   prefs.ui_tab_bg_color = -1;
-   prefs.ui_tab_active_fg_color = -1;
-   prefs.ui_tab_height = 20;
-   prefs.ui_tab_fg_color = -1;
-   prefs.ui_text_bg_color = -1;
+   prefs.w3c_plus_heuristics = TRUE;
 
-   prefs.penalty_hyphen = 100;
-   prefs.penalty_hyphen_2 = 800;
-   prefs.penalty_em_dash_left = 800;
-   prefs.penalty_em_dash_right = 100;
-   prefs.penalty_em_dash_right_2 = 800;
-   prefs.stretchability_factor = 100;
+   /* Handy shortcut... */
+#  define ADD_SEARCH(value) dList_append(prefs.search_urls, dStrdup(value))
+
+   /* Initialize the list of default search engines */
+   ADD_SEARCH("Google "
+              "http://www.google.com/search?q=%s");
+   ADD_SEARCH("Google Images "
+              "http://images.google.com/images?q=%s");
+   ADD_SEARCH("Wikipedia "
+              "http://en.wikipedia.org/wiki/Special:Search?search=%s");
+   ADD_SEARCH("Free Dictionary "
+              "http://www.thefreedictionary.com/%s");
+   ADD_SEARCH("Softpedia Downloads "
+              "http://www.softpedia.com/dyn-search.php?search_term=%s");
+   ADD_SEARCH("SourceForge.net "
+              "http://sourceforge.net/search/?type_of_search=soft&words=%s");
+   ADD_SEARCH("Wayback Machine "
+              "http://wayback.archive.org/form-submit.jsp?url=%s");
+#  undef ADD_SEARCH
 }
 
-/**
- *  memory-deallocation.
+/*
+ *  memory-deallocation
  *  (Call this one at exit time)
  */
 void a_Prefs_freeall(void)
 {
    int i;
 
+   dFree(prefs.bookmarks_file);
+   dFree(prefs.date_format);
    dFree(prefs.font_cursive);
    dFree(prefs.font_fantasy);
    dFree(prefs.font_monospace);
@@ -158,11 +161,8 @@ void a_Prefs_freeall(void)
    dFree(prefs.http_referer);
    dFree(prefs.http_user_agent);
    dFree(prefs.no_proxy);
-   dFree(prefs.save_dir);
    for (i = 0; i < dList_length(prefs.search_urls); ++i)
       dFree(dList_nth_data(prefs.search_urls, i));
    dList_free(prefs.search_urls);
    a_Url_free(prefs.start_page);
-   a_Url_free(prefs.new_tab_page);
-   dFree(prefs.theme);
 }

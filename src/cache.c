@@ -2,7 +2,6 @@
  * File: cache.c
  *
  * Copyright 2000-2007 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -11,13 +10,12 @@
  */
 
 /*
- * @file
  * Dillo's cache module
  */
 
+#include <ctype.h>              /* for tolower */
 #include <sys/types.h>
 
-#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -28,18 +26,20 @@
 #include "dicache.h"
 #include "nav.h"
 #include "cookies.h"
-#include "hsts.h"
 #include "misc.h"
 #include "capi.h"
 #include "decode.h"
 #include "auth.h"
-#include "domain.h"
+#include "file.h"
+
 #include "timeout.hh"
 #include "uicmd.hh"
 
-/** Maximum initial size for the automatically-growing data buffer */
+#define NULLKey 0
+
+/* Maximum initial size for the automatically-growing data buffer */
 #define MAX_INIT_BUF  1024*1024
-/** Maximum filesize for a URL, before offering a download */
+/* Maximum filesize for a URL, before offering a download */
 #define HUGE_FILESIZE 15*1024*1024
 
 /*
@@ -47,37 +47,37 @@
  */
 
 typedef struct {
-   const DilloUrl *Url;      /**< Cached Url. Url is used as a primary Key */
-   char *TypeDet;            /**< MIME type string (detected from data) */
-   char *TypeHdr;            /**< MIME type string as from the HTTP Header */
-   char *TypeMeta;           /**< MIME type string from META HTTP-EQUIV */
-   char *TypeNorm;           /**< MIME type string normalized */
-   Dstr *Header;             /**< HTTP header */
-   const DilloUrl *Location; /**< New URI for redirects */
-   Dlist *Auth;              /**< Authentication fields */
-   Dstr *Data;               /**< Pointer to raw data */
-   Dstr *UTF8Data;           /**< Data after charset translation */
-   int DataRefcount;         /**< Reference count */
-   DecodeTransfer *TransferDecoder;  /**< Transfer decoder (e.g., chunked) */
-   Decode *ContentDecoder;   /**< Data decoder (e.g., gzip) */
-   Decode *CharsetDecoder;   /**< Translates text to UTF-8 encoding */
-   int ExpectedSize;         /**< Goal size of the HTTP transfer (0 if unknown)*/
-   int TransferSize;         /**< Actual length of the HTTP transfer */
-   uint_t Flags;             /**< See Flag Defines in cache.h */
+   const DilloUrl *Url;      /* Cached Url. Url is used as a primary Key */
+   char *TypeDet;            /* MIME type string (detected from data) */
+   char *TypeHdr;            /* MIME type string as from the HTTP Header */
+   char *TypeMeta;           /* MIME type string from META HTTP-EQUIV */
+   char *TypeNorm;           /* MIME type string normalized */
+   Dstr *Header;             /* HTTP header */
+   const DilloUrl *Location; /* New URI for redirects */
+   Dlist *Auth;              /* Authentication fields */
+   Dstr *Data;               /* Pointer to raw data */
+   Dstr *UTF8Data;           /* Data after charset translation */
+   int DataRefcount;         /* Reference count */
+   Decode *TransferDecoder;  /* Transfer decoder (e.g., chunked) */
+   Decode *ContentDecoder;   /* Data decoder (e.g., gzip) */
+   Decode *CharsetDecoder;   /* Translates text to UTF-8 encoding */
+   int ExpectedSize;         /* Goal size of the HTTP transfer (0 if unknown)*/
+   int TransferSize;         /* Actual length of the HTTP transfer */
+   uint_t Flags;             /* See Flag Defines in cache.h */
 } CacheEntry_t;
 
 
 /*
  *  Local data
  */
-/** A sorted list for cached data. Holds pointers to CacheEntry_t structs */
+/* A sorted list for cached data. Holds pointers to CacheEntry_t structs */
 static Dlist *CachedURLs;
 
-/** A list for cache clients.
+/* A list for cache clients.
  * Although implemented as a list, we'll call it ClientQueue  --Jcid */
 static Dlist *ClientQueue;
 
-/** A list for delayed clients (it holds weak pointers to cache entries,
+/* A list for delayed clients (it holds weak pointers to cache entries,
  * which are used to make deferred calls to Cache_process_queue) */
 static Dlist *DelayedQueue;
 static uint_t DelayedQueueIdleId = 0;
@@ -90,8 +90,9 @@ static CacheEntry_t *Cache_process_queue(CacheEntry_t *entry);
 static void Cache_delayed_process_queue(CacheEntry_t *entry);
 static void Cache_auth_entry(CacheEntry_t *entry, BrowserWindow *bw);
 static void Cache_entry_inject(const DilloUrl *Url, Dstr *data_ds);
+static void Cache_inject_file(const DilloUrl *url);
 
-/**
+/*
  * Determine if two cache entries are equal (used by CachedURLs)
  */
 static int Cache_entry_cmp(const void *v1, const void *v2)
@@ -101,7 +102,7 @@ static int Cache_entry_cmp(const void *v1, const void *v2)
    return a_Url_cmp(d1->Url, d2->Url);
 }
 
-/**
+/*
  * Determine if two cache entries are equal, using a URL as key.
  */
 static int Cache_entry_by_url_cmp(const void *v1, const void *v2)
@@ -112,8 +113,8 @@ static int Cache_entry_by_url_cmp(const void *v1, const void *v2)
    return a_Url_cmp(u1, u2);
 }
 
-/**
- * Initialize cache data
+/*
+ * Initialize dicache data
  */
 void a_Cache_init(void)
 {
@@ -129,11 +130,20 @@ void a_Cache_init(void)
       dStr_free(ds, 1);
       a_Url_free(url);
    }
+
+   /* inject about:blank into the cache */
+   {
+      DilloUrl *url = a_Url_new("about:blank", NULL);
+      Dstr *ds = dStr_new("");
+      Cache_entry_inject(url, ds);
+      dStr_free(ds, 1);
+      a_Url_free(url);
+   }
 }
 
 /* Client operations ------------------------------------------------------ */
 
-/**
+/*
  * Add a client to ClientQueue.
  *  - Every client-field is just a reference (except 'Web').
  *  - Return a unique number for identifying the client.
@@ -144,9 +154,7 @@ static int Cache_client_enqueue(const DilloUrl *Url, DilloWeb *Web,
    static int ClientKey = 0; /* Provide a primary key for each client */
    CacheClient_t *NewClient;
 
-   if (ClientKey < INT_MAX) /* check for integer overflow */
-      ClientKey++;
-   else
+   if (++ClientKey <= 0)
       ClientKey = 1;
 
    NewClient = dNew(CacheClient_t, 1);
@@ -164,7 +172,7 @@ static int Cache_client_enqueue(const DilloUrl *Url, DilloWeb *Web,
    return ClientKey;
 }
 
-/**
+/*
  * Compare function for searching a Client by its key
  */
 static int Cache_client_by_key_cmp(const void *client, const void *key)
@@ -172,11 +180,15 @@ static int Cache_client_by_key_cmp(const void *client, const void *key)
    return ((CacheClient_t *)client)->Key - VOIDP2INT(key);
 }
 
-/**
+/*
  * Remove a client from the queue
  */
-static void Cache_client_dequeue(CacheClient_t *Client)
+static void Cache_client_dequeue(CacheClient_t *Client, int Key)
 {
+   if (!Client) {
+      Client = dList_find_custom(ClientQueue, INT2VOIDP(Key),
+                                 Cache_client_by_key_cmp);
+   }
    if (Client) {
       dList_remove(ClientQueue, Client);
       a_Web_free(Client->Web);
@@ -187,7 +199,7 @@ static void Cache_client_dequeue(CacheClient_t *Client)
 
 /* Entry operations ------------------------------------------------------- */
 
-/**
+/*
  * Set safe values for a new cache entry
  */
 static void Cache_entry_init(CacheEntry_t *NewEntry, const DilloUrl *Url)
@@ -208,10 +220,10 @@ static void Cache_entry_init(CacheEntry_t *NewEntry, const DilloUrl *Url)
    NewEntry->CharsetDecoder = NULL;
    NewEntry->ExpectedSize = 0;
    NewEntry->TransferSize = 0;
-   NewEntry->Flags = CA_IsEmpty | CA_InProgress | CA_KeepAlive;
+   NewEntry->Flags = CA_IsEmpty;
 }
 
-/**
+/*
  * Get the data structure for a cached URL (using 'Url' as the search key)
  * If 'Url' isn't cached, return NULL
  */
@@ -220,7 +232,7 @@ static CacheEntry_t *Cache_entry_search(const DilloUrl *Url)
    return dList_find_sorted(CachedURLs, Url, Cache_entry_by_url_cmp);
 }
 
-/**
+/*
  * Given a URL, find its cache entry, following redirections.
  */
 static CacheEntry_t *Cache_entry_search_with_redirect(const DilloUrl *Url)
@@ -236,7 +248,7 @@ static CacheEntry_t *Cache_entry_search_with_redirect(const DilloUrl *Url)
          break;
       }
       /* Test for a working redirection */
-      if (entry->Flags & CA_Redirect && entry->Location) {
+      if (entry && entry->Flags & CA_Redirect && entry->Location) {
          Url = entry->Location;
       } else
          break;
@@ -244,7 +256,7 @@ static CacheEntry_t *Cache_entry_search_with_redirect(const DilloUrl *Url)
    return entry;
 }
 
-/**
+/*
  * Allocate and set a new entry in the cache list
  */
 static CacheEntry_t *Cache_entry_add(const DilloUrl *Url)
@@ -262,7 +274,7 @@ static CacheEntry_t *Cache_entry_add(const DilloUrl *Url)
    return new_entry;
 }
 
-/**
+/*
  * Inject full page content directly into the cache.
  * Used for "about:splash". May be used for "about:cache" too.
  */
@@ -272,7 +284,7 @@ static void Cache_entry_inject(const DilloUrl *Url, Dstr *data_ds)
 
    if (!(entry = Cache_entry_search(Url)))
       entry = Cache_entry_add(Url);
-   entry->Flags = CA_GotHeader + CA_GotLength + CA_InternalUrl;
+   entry->Flags |= CA_GotData + CA_GotHeader + CA_GotLength + CA_InternalUrl;
    if (data_ds->len)
       entry->Flags &= ~CA_IsEmpty;
    dStr_truncate(entry->Data, 0);
@@ -281,7 +293,21 @@ static void Cache_entry_inject(const DilloUrl *Url, Dstr *data_ds)
    entry->ExpectedSize = entry->TransferSize = entry->Data->len;
 }
 
-/**
+/*
+ * Inject file:/ protocol content directly into the cache.
+ */
+static void Cache_inject_file(const DilloUrl *url)
+{
+   const char *url_str = URL_STR(url);
+   const char *content_type = a_File_content_type(url_str);
+   void *file = a_File_open(url_str);
+
+   Cache_entry_inject(url, a_File_read(file));
+   a_Cache_set_content_type(url, content_type, "http");
+   a_File_close(file);
+}
+
+/*
  *  Free Authentication fields.
  */
 static void Cache_auth_free(Dlist *auth)
@@ -293,7 +319,7 @@ static void Cache_auth_free(Dlist *auth)
    dList_free(auth);
 }
 
-/**
+/*
  *  Free the components of a CacheEntry_t struct.
  */
 static void Cache_entry_free(CacheEntry_t *entry)
@@ -311,13 +337,13 @@ static void Cache_entry_free(CacheEntry_t *entry)
    if (entry->CharsetDecoder)
       a_Decode_free(entry->CharsetDecoder);
    if (entry->TransferDecoder)
-      a_Decode_transfer_free(entry->TransferDecoder);
+      a_Decode_free(entry->TransferDecoder);
    if (entry->ContentDecoder)
       a_Decode_free(entry->ContentDecoder);
    dFree(entry);
 }
 
-/**
+/*
  * Remove an entry, from the cache.
  * All the entry clients are removed too! (it may stop rendering of this
  * same resource on other windows, but nothing more).
@@ -351,7 +377,7 @@ static void Cache_entry_remove(CacheEntry_t *entry, DilloUrl *url)
    Cache_entry_free(entry);
 }
 
-/**
+/*
  * Wrapper for capi.
  */
 void a_Cache_entry_remove_by_url(DilloUrl *url)
@@ -361,7 +387,7 @@ void a_Cache_entry_remove_by_url(DilloUrl *url)
 
 /* Misc. operations ------------------------------------------------------- */
 
-/**
+/*
  * Try finding the url in the cache. If it hits, send the cache contents
  * from there. If it misses, set up a new connection.
  *
@@ -371,7 +397,7 @@ void a_Cache_entry_remove_by_url(DilloUrl *url)
  *   Note: 'Call' and/or 'CbData' can be NULL, in that case they get set
  *   later by a_Web_dispatch_by_type, based on content/type and 'Web' data.
  *
- * @return A primary key for identifying the client,
+ * Return value: A primary key for identifying the client,
  */
 int a_Cache_open_url(void *web, CA_Callback_t Call, void *CbData)
 {
@@ -383,6 +409,12 @@ int a_Cache_open_url(void *web, CA_Callback_t Call, void *CbData)
    if (URL_FLAGS(Url) & URL_E2EQuery) {
       /* remove current entry */
       Cache_entry_remove(NULL, Url);
+   }
+
+   if (!strcmp(URL_SCHEME(Url), "file")) {
+      /* inject the file contents into the cache (putting this
+       * here lets us avoid exposing the cache injection function) */
+      Cache_inject_file(Url);
    }
 
    if ((entry = Cache_entry_search(Url))) {
@@ -400,7 +432,7 @@ int a_Cache_open_url(void *web, CA_Callback_t Call, void *CbData)
    return ClientKey;
 }
 
-/**
+/*
  * Get cache entry status
  */
 uint_t a_Cache_get_flags(const DilloUrl *url)
@@ -409,7 +441,7 @@ uint_t a_Cache_get_flags(const DilloUrl *url)
    return (entry ? entry->Flags : 0);
 }
 
-/**
+/*
  * Get cache entry status (following redirections).
  */
 uint_t a_Cache_get_flags_with_redirection(const DilloUrl *url)
@@ -418,7 +450,7 @@ uint_t a_Cache_get_flags_with_redirection(const DilloUrl *url)
    return (entry ? entry->Flags : 0);
 }
 
-/**
+/*
  * Reference the cache data.
  */
 static void Cache_ref_data(CacheEntry_t *entry)
@@ -436,7 +468,7 @@ static void Cache_ref_data(CacheEntry_t *entry)
    }
 }
 
-/**
+/*
  * Unreference the cache data.
  */
 static void Cache_unref_data(CacheEntry_t *entry)
@@ -457,7 +489,7 @@ static void Cache_unref_data(CacheEntry_t *entry)
    }
 }
 
-/**
+/*
  * Get current content type.
  */
 static const char *Cache_current_content_type(CacheEntry_t *entry)
@@ -466,7 +498,7 @@ static const char *Cache_current_content_type(CacheEntry_t *entry)
           : entry->TypeHdr ? entry->TypeHdr : entry->TypeDet;
 }
 
-/**
+/*
  * Get current Content-Type for cache entry found by URL.
  */
 const char *a_Cache_get_content_type(const DilloUrl *url)
@@ -476,7 +508,7 @@ const char *a_Cache_get_content_type(const DilloUrl *url)
    return (entry) ? Cache_current_content_type(entry) : NULL;
 }
 
-/**
+/*
  * Get pointer to entry's data.
  */
 static Dstr *Cache_data(CacheEntry_t *entry)
@@ -484,10 +516,10 @@ static Dstr *Cache_data(CacheEntry_t *entry)
    return entry->UTF8Data ? entry->UTF8Data : entry->Data;
 }
 
-/**
+/*
  * Change Content-Type for cache entry found by url.
  * from = { "http" | "meta" }
- * @return new content type.
+ * Return new content type.
  */
 const char *a_Cache_set_content_type(const DilloUrl *url, const char *ctype,
                                      const char *from)
@@ -501,7 +533,7 @@ const char *a_Cache_set_content_type(const DilloUrl *url, const char *ctype,
    _MSG("a_Cache_set_content_type {%s} {%s}\n", ctype, URL_STR(url));
 
    curr = Cache_current_content_type(entry);
-   if (entry->TypeMeta || (*from == 'h' && entry->TypeHdr) ) {
+   if  (entry->TypeMeta || (*from == 'h' && entry->TypeHdr) ) {
       /* Type is already been set. Do nothing.
        * BTW, META overrides TypeHdr */
    } else {
@@ -520,14 +552,9 @@ const char *a_Cache_set_content_type(const DilloUrl *url, const char *ctype,
             /* META only gives charset; use detected MIME type too */
             entry->TypeNorm = dStrconcat(entry->TypeDet, ctype, NULL);
          } else if (*from == 'm' &&
-                    !dStrnAsciiCasecmp(ctype, "text/xhtml", 10)) {
+                    !dStrncasecmp(ctype, "text/xhtml", 10)) {
             /* WORKAROUND: doxygen uses "text/xhtml" in META */
-            if (charset) {
-               entry->TypeNorm = dStrconcat("application/xhtml+xml",
-                        "; charset=", charset, NULL);
-            } else {
-               entry->TypeNorm = dStrdup("application/xhtml+xml");
-            }
+            entry->TypeNorm = dStrdup(entry->TypeDet);
          }
          if (charset) {
             if (entry->CharsetDecoder)
@@ -545,9 +572,9 @@ const char *a_Cache_set_content_type(const DilloUrl *url, const char *ctype,
    return curr;
 }
 
-/**
+/*
  * Get the pointer to the URL document, and its size, from the cache entry.
- * @return 1 cached, 0 not cached.
+ * Return: 1 cached, 0 not cached.
  */
 int a_Cache_get_buf(const DilloUrl *Url, char **PBuf, int *BufSize)
 {
@@ -565,7 +592,7 @@ int a_Cache_get_buf(const DilloUrl *Url, char **PBuf, int *BufSize)
    return (entry ? 1 : 0);
 }
 
-/**
+/*
  * Unreference the data buffer when no longer using it.
  */
 void a_Cache_unref_buf(const DilloUrl *Url)
@@ -574,10 +601,10 @@ void a_Cache_unref_buf(const DilloUrl *Url)
 }
 
 
-/**
+/*
  * Extract a single field from the header, allocating and storing the value
  * in 'field'. ('fieldname' must not include the trailing ':')
- * @return a new string with the field-content if found (NULL on error)
+ * Return a new string with the field-content if found (NULL on error)
  * (This function expects a '\r'-stripped header, with one-line header fields)
  */
 static char *Cache_parse_field(const char *header, const char *fieldname)
@@ -588,7 +615,7 @@ static char *Cache_parse_field(const char *header, const char *fieldname)
    for (i = 0; header[i]; i++) {
       /* Search fieldname */
       for (j = 0; fieldname[j]; j++)
-        if (D_ASCII_TOLOWER(fieldname[j]) != D_ASCII_TOLOWER(header[i + j]))
+        if (tolower(fieldname[j]) != tolower(header[i + j]))
            break;
       if (fieldname[j]) {
          /* skip to next line */
@@ -611,7 +638,7 @@ static char *Cache_parse_field(const char *header, const char *fieldname)
    return NULL;
 }
 
-/**
+/*
  * Extract multiple fields from the header.
  */
 static Dlist *Cache_parse_multiple_fields(const char *header,
@@ -624,7 +651,7 @@ static Dlist *Cache_parse_multiple_fields(const char *header,
    for (i = 0; header[i]; i++) {
       /* Search fieldname */
       for (j = 0; fieldname[j]; j++)
-         if (D_ASCII_TOLOWER(fieldname[j]) != D_ASCII_TOLOWER(header[i + j]))
+         if (tolower(fieldname[j]) != tolower(header[i + j]))
             break;
       if (fieldname[j]) {
          /* skip to next line */
@@ -653,15 +680,14 @@ static Dlist *Cache_parse_multiple_fields(const char *header,
    return fields;
 }
 
-/**
+/*
  * Scan, allocate, and set things according to header info.
  * (This function needs the whole header to work)
  */
 static void Cache_parse_header(CacheEntry_t *entry)
 {
    char *header = entry->Header->str;
-   bool_t server1point0 = !strncmp(entry->Header->str, "HTTP/1.0", 8);
-   char *Length, *Type, *location_str, *encoding, *connection, *hsts;
+   char *Length, *Type, *location_str, *encoding;
 #ifndef DISABLE_COOKIES
    Dlist *Cookies;
 #endif
@@ -680,28 +706,21 @@ static void Cache_parse_header(CacheEntry_t *entry)
          entry->Header = dStr_new("");
          return;
       }
-      if (header[9] == '3' && header[10] == '0' &&
-          (location_str = Cache_parse_field(header, "Location"))) {
+      if (header[9] == '3' && header[10] == '0') {
          /* 30x: URL redirection */
-         entry->Location = a_Url_new(location_str, URL_STR_(entry->Url));
+         if ((location_str = Cache_parse_field(header, "Location"))) {
+            DilloUrl *location_url;
 
-         if (!a_Domain_permit(entry->Url, entry->Location) ||
-             (URL_FLAGS(entry->Location) & (URL_Post + URL_Get) &&
-              dStrAsciiCasecmp(URL_SCHEME(entry->Location), "dpi") == 0 &&
-              dStrAsciiCasecmp(URL_SCHEME(entry->Url), "dpi") != 0)) {
-            /* Domain test, and forbid dpi GET and POST from non dpi-generated
-             * urls.
-             */
-            MSG("Redirection not followed from %s to %s\n",
-                URL_HOST(entry->Url), URL_STR(entry->Location));
-         } else {
             entry->Flags |= CA_Redirect;
             if (header[11] == '1')
                entry->Flags |= CA_ForceRedirect;  /* 301 Moved Permanently */
             else if (header[11] == '2')
                entry->Flags |= CA_TempRedirect;   /* 302 Temporary Redirect */
+
+            location_url = a_Url_new(location_str, URL_STR_(entry->Url));
+            entry->Location = location_url;
+            dFree(location_str);
          }
-         dFree(location_str);
       } else if (strncmp(header + 9, "401", 3) == 0) {
          entry->Auth =
             Cache_parse_multiple_fields(header, "WWW-Authenticate");
@@ -718,25 +737,6 @@ static void Cache_parse_header(CacheEntry_t *entry)
       dList_free(warnings);
    }
 
-   if (server1point0)
-      entry->Flags &= ~CA_KeepAlive;
-
-   if ((connection = Cache_parse_field(header, "Connection"))) {
-      if (!dStrAsciiCasecmp(connection, "close"))
-         entry->Flags &= ~CA_KeepAlive;
-      else if (server1point0 && !dStrAsciiCasecmp(connection, "keep-alive"))
-         entry->Flags |= CA_KeepAlive;
-      dFree(connection);
-   }
-
-   if (prefs.http_strict_transport_security &&
-       !dStrAsciiCasecmp(URL_SCHEME(entry->Url), "https") &&
-       a_Url_host_type(URL_HOST(entry->Url)) == URL_HOST_NAME &&
-       (hsts = Cache_parse_field(header, "Strict-Transport-Security"))) {
-      a_Hsts_set(hsts, entry->Url);
-      dFree(hsts);
-   }
-
    /*
     * Get Transfer-Encoding and initialize decoder
     */
@@ -750,7 +750,7 @@ static void Cache_parse_header(CacheEntry_t *entry)
           * If Transfer-Encoding is present, Content-Length must be ignored.
           * If the Transfer-Encoding is non-identity, it is an error.
           */
-         if (dStrAsciiCasecmp(encoding, "identity"))
+         if (dStrcasecmp(encoding, "identity"))
             MSG_HTTP("Content-Length and non-identity Transfer-Encoding "
                      "headers both present.\n");
       } else {
@@ -764,26 +764,13 @@ static void Cache_parse_header(CacheEntry_t *entry)
 
 #ifndef DISABLE_COOKIES
    if ((Cookies = Cache_parse_multiple_fields(header, "Set-Cookie"))) {
-      CacheClient_t *client;
+      char *server_date = Cache_parse_field(header, "Date");
 
-      for (i = 0; (client = dList_nth_data(ClientQueue, i)); ++i) {
-         if (client->Url == entry->Url) {
-            DilloWeb *web = client->Web;
-
-            if (!web->requester ||
-                a_Url_same_organization(entry->Url, web->requester)) {
-               /* If cookies are third party, don't even consider them. */
-               char *server_date = Cache_parse_field(header, "Date");
-
-               a_Cookies_set(Cookies, entry->Url, server_date);
-               dFree(server_date);
-               break;
-            }
-         }
-      }
+      a_Cookies_set(Cookies, entry->Url, server_date);
       for (i = 0; (data = dList_nth_data(Cookies, i)); ++i)
          dFree(data);
       dList_free(Cookies);
+      dFree(server_date);
    }
 #endif /* !DISABLE_COOKIES */
 
@@ -817,7 +804,7 @@ static void Cache_parse_header(CacheEntry_t *entry)
    Cache_ref_data(entry);
 }
 
-/**
+/*
  * Consume bytes until the whole header is got (up to a "\r\n\r\n" sequence)
  * (Also unfold multi-line fields and strip '\r' chars from header)
  */
@@ -852,41 +839,7 @@ static int Cache_get_header(CacheEntry_t *entry,
    return 0;
 }
 
-static void Cache_finish_msg(CacheEntry_t *entry)
-{
-   if (!(entry->Flags & CA_InProgress)) {
-      /* already finished */
-      return;
-   }
-
-   if ((entry->ExpectedSize || entry->TransferSize) &&
-       entry->TypeHdr == NULL) {
-      MSG_HTTP("Message with a body lacked Content-Type header.\n");
-   }
-   if ((entry->Flags & CA_GotLength) &&
-       (entry->ExpectedSize != entry->TransferSize)) {
-      MSG_HTTP("Content-Length (%d) does NOT match message body (%d) for %s\n",
-               entry->ExpectedSize, entry->TransferSize, URL_STR_(entry->Url));
-   }
-   entry->Flags &= ~CA_InProgress;
-   if (entry->TransferDecoder) {
-      a_Decode_transfer_free(entry->TransferDecoder);
-      entry->TransferDecoder = NULL;
-   }
-   if (entry->ContentDecoder) {
-      a_Decode_free(entry->ContentDecoder);
-      entry->ContentDecoder = NULL;
-   }
-   dStr_fit(entry->Data);                /* fit buffer size! */
-
-   if ((entry = Cache_process_queue(entry))) {
-      if (entry->Flags & CA_GotHeader) {
-         Cache_unref_data(entry);
-      }
-   }
-}
-
-/**
+/*
  * Receive new data, update the reception buffer (for next read), update the
  * cache, and service the client queue.
  *
@@ -894,17 +847,16 @@ static void Cache_finish_msg(CacheEntry_t *entry)
  *  'Op' is the operation to perform
  *  'VPtr' is a (void) pointer to the IO control structure
  */
-bool_t a_Cache_process_dbuf(int Op, const char *buf, size_t buf_size,
-                            const DilloUrl *Url)
+void a_Cache_process_dbuf(int Op, const char *buf, size_t buf_size,
+                          const DilloUrl *Url)
 {
    int offset, len;
    const char *str;
    Dstr *dstr1, *dstr2, *dstr3;
-   bool_t done = FALSE;
    CacheEntry_t *entry = Cache_entry_search(Url);
 
    /* Assert a valid entry (not aborted) */
-   dReturn_val_if_fail (entry != NULL, FALSE);
+   dReturn_if_fail (entry != NULL);
 
    _MSG("__a_Cache_process_dbuf__\n");
 
@@ -928,8 +880,7 @@ bool_t a_Cache_process_dbuf(int Op, const char *buf, size_t buf_size,
 
          /* Decode arrived data (<= 3 stages) */
          if (entry->TransferDecoder) {
-            dstr1 = a_Decode_transfer_process(entry->TransferDecoder, str,len);
-            done = a_Decode_transfer_finished(entry->TransferDecoder);
+            dstr1 = a_Decode_process(entry->TransferDecoder, str, len);
             str = dstr1->str;
             len = dstr1->len;
          }
@@ -950,46 +901,54 @@ bool_t a_Cache_process_dbuf(int Op, const char *buf, size_t buf_size,
          if (entry->Data->len)
             entry->Flags &= ~CA_IsEmpty;
 
-         if ((entry->Flags & CA_GotLength) &&
-             (entry->TransferSize >= entry->ExpectedSize)) {
-            done = TRUE;
-         }
-         if (!(entry->Flags & CA_KeepAlive)) {
-            /* Let IOClose finish it later */
-            done = FALSE;
-         }
-
          entry = Cache_process_queue(entry);
-
-         if (entry && done)
-            Cache_finish_msg(entry);
       }
    } else if (Op == IOClose) {
-      Cache_finish_msg(entry);
-   } else if (Op == IOAbort) {
-      entry->Flags |= CA_Aborted;
-      if (entry->Data->len) {
-         MSG("Premature close for %s\n", URL_STR(entry->Url));
-         Cache_finish_msg(entry);
-      } else {
-         int i;
-         CacheClient_t *Client;
-
-         for (i = 0; (Client = dList_nth_data(ClientQueue, i)); ++i) {
-            if (Client->Url == entry->Url) {
-               DilloWeb *web = (DilloWeb *)Client->Web;
-
-               a_Bw_remove_client(web->bw, Client->Key);
-               Cache_client_dequeue(Client);
-               --i; /* Keep the index value in the next iteration */
-            }
+      if ((entry->ExpectedSize || entry->TransferSize) &&
+          entry->TypeHdr == NULL) {
+         MSG_HTTP("Message with a body lacked Content-Type header.\n");
+      }
+      if ((entry->Flags & CA_GotLength) &&
+          (entry->ExpectedSize != entry->TransferSize)) {
+         MSG_HTTP("Content-Length does NOT match message body,\n"
+                  " at: %s\n", URL_STR_(entry->Url));
+         MSG("entry->ExpectedSize = %d, entry->TransferSize = %d\n",
+             entry->ExpectedSize, entry->TransferSize);
+      }
+      if (!entry->TransferSize && !(entry->Flags & CA_Redirect) &&
+          (entry->Flags & WEB_RootUrl)) {
+         char *eol = strchr(entry->Header->str, '\n');
+         if (eol) {
+            char *status_line = dStrndup(entry->Header->str,
+                                         eol - entry->Header->str);
+            MSG_HTTP("Body was empty. Server sent status: %s\n", status_line);
+            dFree(status_line);
          }
       }
+      entry->Flags |= CA_GotData;
+      entry->Flags &= ~CA_Stopped;          /* it may catch up! */
+      if (entry->TransferDecoder) {
+         a_Decode_free(entry->TransferDecoder);
+         entry->TransferDecoder = NULL;
+      }
+      if (entry->ContentDecoder) {
+         a_Decode_free(entry->ContentDecoder);
+         entry->ContentDecoder = NULL;
+      }
+      dStr_fit(entry->Data);                /* fit buffer size! */
+
+      if ((entry = Cache_process_queue(entry))) {
+         if (entry->Flags & CA_GotHeader) {
+            Cache_unref_data(entry);
+         }
+      }
+   } else if (Op == IOAbort) {
+      /* unused */
+      MSG("a_Cache_process_dbuf Op = IOAbort; not implemented!\n");
    }
-   return done;
 }
 
-/**
+/*
  * Process redirections (HTTP 30x answers)
  * (This is a work in progress --not finished yet)
  */
@@ -999,20 +958,14 @@ static int Cache_redirect(CacheEntry_t *entry, int Flags, BrowserWindow *bw)
 
    _MSG(" Cache_redirect: redirect_level = %d\n", bw->redirect_level);
 
-   /* Don't allow redirection for SpamSafe/local URLs */
-   if (URL_FLAGS(entry->Url) & URL_SpamSafe) {
-      a_UIcmd_set_msg(bw, "WARNING: local URL with redirection.  Aborting.");
-      return 0;
-   }
-
    /* if there's a redirect loop, stop now */
    if (bw->redirect_level >= 5)
       entry->Flags |= CA_RedirectLoop;
 
    if (entry->Flags & CA_RedirectLoop) {
-      a_UIcmd_set_msg(bw, "ERROR: redirect loop for: %s", URL_STR_(entry->Url));
-      bw->redirect_level = 0;
-      return 0;
+     a_UIcmd_set_msg(bw, "ERROR: redirect loop for: %s", URL_STR_(entry->Url));
+     bw->redirect_level = 0;
+     return 0;
    }
 
    if ((entry->Flags & CA_Redirect && entry->Location) &&
@@ -1048,7 +1001,7 @@ typedef struct {
    BrowserWindow *bw;
 } CacheAuthData_t;
 
-/**
+/*
  * Ask for user/password and reload the page.
  */
 static void Cache_auth_callback(void *vdata)
@@ -1060,10 +1013,10 @@ static void Cache_auth_callback(void *vdata)
    a_Url_free(data->url);
    dFree(data);
    Cache_auth_entry(NULL, NULL);
-   a_Timeout_remove();
+   a_Timeout_remove(Cache_auth_callback, vdata);
 }
 
-/**
+/*
  * Set a timeout function to ask for user/password.
  */
 static void Cache_auth_entry(CacheEntry_t *entry, BrowserWindow *bw)
@@ -1086,20 +1039,20 @@ static void Cache_auth_entry(CacheEntry_t *entry, BrowserWindow *bw)
    }
 }
 
-/**
+/*
  * Check whether a URL scheme is downloadable.
- * @return 1 enabled, 0 disabled.
+ * Return: 1 enabled, 0 disabled.
  */
 int a_Cache_download_enabled(const DilloUrl *url)
 {
-   if (!dStrAsciiCasecmp(URL_SCHEME(url), "http") ||
-       !dStrAsciiCasecmp(URL_SCHEME(url), "https") ||
-       !dStrAsciiCasecmp(URL_SCHEME(url), "ftp"))
+   if (!dStrcasecmp(URL_SCHEME(url), "http") ||
+       !dStrcasecmp(URL_SCHEME(url), "https") ||
+       !dStrcasecmp(URL_SCHEME(url), "ftp"))
       return 1;
    return 0;
 }
 
-/**
+/*
  * Don't process data any further, but let the cache fill the entry.
  * (Currently used to handle WEB_RootUrl redirects,
  *  and to ignore image redirects --Jcid)
@@ -1126,7 +1079,7 @@ typedef struct {
    DilloUrl *url;
 } Cache_savelink_t;
 
-/**
+/*
  * Save link from behind a timeout so that Cache_process_queue() can
  * get on with its work.
  */
@@ -1139,28 +1092,7 @@ static void Cache_savelink_cb(void *vdata)
    dFree(data);
 }
 
-/**
- * Let the client know that we're not following a redirection.
- */
-static void Cache_provide_redirection_blocked_page(CacheEntry_t *entry,
-                                                   CacheClient_t *client)
-{
-   DilloWeb *clientWeb = client->Web;
-
-   a_Web_dispatch_by_type("text/html", clientWeb, &client->Callback,
-                          &client->CbData);
-   client->Buf = dStrconcat("<!doctype html><html><body>"
-                    "Dillo blocked a redirection from <a href=\"",
-                    URL_STR(entry->Url), "\">", URL_STR(entry->Url),
-                    "</a> to <a href=\"", URL_STR(entry->Location), "\">",
-                    URL_STR(entry->Location), "</a> based on your domainrc "
-                    "settings.</body></html>", NULL);
-   client->BufSize = strlen(client->Buf);
-   (client->Callback)(CA_Send, client);
-   dFree(client->Buf);
-}
-
-/**
+/*
  * Update cache clients for a single cache-entry
  * Tasks:
  *   - Set the client function (if not already set)
@@ -1168,7 +1100,7 @@ static void Cache_provide_redirection_blocked_page(CacheEntry_t *entry,
  *   - Remove clients when done
  *   - Call redirect handler
  *
- * @return Cache entry, which may be NULL if it has been removed.
+ * Return: Cache entry, which may be NULL if it has been removed.
  *
  * TODO: Implement CA_Abort Op in client callback
  */
@@ -1194,7 +1126,7 @@ static CacheEntry_t *Cache_process_queue(CacheEntry_t *entry)
       st = a_Misc_get_content_type_from_data(
               entry->Data->str, entry->Data->len, &Type);
       _MSG("Cache: detected Content-Type '%s'\n", Type);
-      if (st == 0 || !(entry->Flags & CA_InProgress)) {
+      if (st == 0 || entry->Flags & CA_GotData) {
          if (a_Misc_content_type_check(entry->TypeHdr, Type) < 0) {
             MSG_HTTP("Content-Type '%s' doesn't match the real data.\n",
                      entry->TypeHdr);
@@ -1232,7 +1164,7 @@ static CacheEntry_t *Cache_process_queue(CacheEntry_t *entry)
                Client_bw->redirect_level = 0;
             }
             if (entry->Flags & CA_HugeFile) {
-               a_UIcmd_set_msg(Client_bw, "Huge file! (%d MB)",
+               a_UIcmd_set_msg(Client_bw,"Huge file! (%dMB)",
                                entry->ExpectedSize / (1024*1024));
                AbortEntry = OfferDownload = TRUE;
             }
@@ -1245,40 +1177,33 @@ static CacheEntry_t *Cache_process_queue(CacheEntry_t *entry)
          /* Set the client function */
          if (!Client->Callback) {
             Client->Callback = Cache_null_client;
-
-            if (entry->Location && !(entry->Flags & CA_Redirect)) {
-               /* Not following redirection, so don't display page body. */
+            if (TypeMismatch) {
+               AbortEntry = TRUE;
             } else {
-               if (TypeMismatch) {
-                  AbortEntry = TRUE;
-               } else {
-                  const char *curr_type = Cache_current_content_type(entry);
-                  st = a_Web_dispatch_by_type(curr_type, ClientWeb,
-                                              &Client->Callback,
-                                              &Client->CbData);
-                  if (st == -1) {
-                     /* MIME type is not viewable */
-                     if (ClientWeb->flags & WEB_RootUrl) {
-                        MSG("Content-Type '%s' not viewable.\n", curr_type);
-                        /* prepare a download offer... */
-                        AbortEntry = OfferDownload = TRUE;
-                     } else {
-                        /* TODO: Resource Type not handled.
-                         * Not aborted to avoid multiple connections on the
-                         * same resource. A better idea is to abort the
-                         * connection and to keep a failed-resource flag in
-                         * the cache entry. */
-                     }
+               const char *curr_type = Cache_current_content_type(entry);
+               st = a_Web_dispatch_by_type(curr_type, ClientWeb,
+                                           &Client->Callback, &Client->CbData);
+               if (st == -1) {
+                  /* MIME type is not viewable */
+                  if (ClientWeb->flags & WEB_RootUrl) {
+                     MSG("Content-Type '%s' not viewable.\n", curr_type);
+                     /* prepare a download offer... */
+                     AbortEntry = OfferDownload = TRUE;
+                  } else {
+                     /* TODO: Resource Type not handled.
+                      * Not aborted to avoid multiple connections on the same
+                      * resource. A better idea is to abort the connection and
+                      * to keep a failed-resource flag in the cache entry. */
                   }
                }
-               if (AbortEntry) {
-                  if (ClientWeb->flags & WEB_RootUrl)
-                     a_Nav_cancel_expect_if_eq(Client_bw, Client->Url);
-                  a_Bw_remove_client(Client_bw, Client->Key);
-                  Cache_client_dequeue(Client);
-                  --i; /* Keep the index value in the next iteration */
-                  continue;
-               }
+            }
+            if (AbortEntry) {
+               if (ClientWeb->flags & WEB_RootUrl)
+                  a_Nav_cancel_expect_if_eq(Client_bw, Client->Url);
+               a_Bw_remove_client(Client_bw, Client->Key);
+               Cache_client_dequeue(Client, NULLKey);
+               --i; /* Keep the index value in the next iteration */
+               continue;
             }
          }
 
@@ -1299,27 +1224,17 @@ static CacheEntry_t *Cache_process_queue(CacheEntry_t *entry)
          }
 
          /* Remove client when done */
-         if (!(entry->Flags & CA_InProgress)) {
+         if (entry->Flags & CA_GotData) {
             /* Copy flags to a local var */
             int flags = ClientWeb->flags;
-
-            if (ClientWeb->flags & WEB_RootUrl && entry->Location &&
-                !(entry->Flags & CA_Redirect)) {
-               Cache_provide_redirection_blocked_page(entry, Client);
-            }
             /* We finished sending data, let the client know */
             (Client->Callback)(CA_Close, Client);
-            if (ClientWeb->flags & WEB_RootUrl) {
-               if (entry->Flags & CA_Aborted) {
-                  a_UIcmd_set_msg(Client_bw, "ERROR: Connection closed early, "
-                                             "read not complete.");
-               }
+            if (ClientWeb->flags & WEB_RootUrl)
                a_UIcmd_set_page_prog(Client_bw, 0, 0);
-            }
-            Cache_client_dequeue(Client);
+            Cache_client_dequeue(Client, NULLKey);
             --i; /* Keep the index value in the next iteration */
 
-            /* we assert just one redirect call */
+            /* within CA_GotData, we assert just one redirect call */
             if (entry->Flags & CA_Redirect)
                Cache_redirect(entry, flags, Client_bw);
          }
@@ -1342,12 +1257,13 @@ static CacheEntry_t *Cache_process_queue(CacheEntry_t *entry)
          }
       }
       a_Url_free(url);
-   } else if (entry->Auth && !(entry->Flags & CA_InProgress)) {
+   } else if (entry->Auth && (entry->Flags & CA_GotData)) {
       Cache_auth_entry(entry, Client_bw);
    }
 
    /* Trigger cleanup when there are no cache clients */
    if (dList_length(ClientQueue) == 0) {
+      _MSG("  a_Dicache_cleanup()\n");
       a_Dicache_cleanup();
    }
 
@@ -1356,13 +1272,12 @@ static CacheEntry_t *Cache_process_queue(CacheEntry_t *entry)
    return entry;
 }
 
-/**
+/*
  * Callback function for Cache_delayed_process_queue.
  */
-static void Cache_delayed_process_queue_callback(void *ptr)
+static void Cache_delayed_process_queue_callback()
 {
    CacheEntry_t *entry;
-   (void) ptr; /* Unused */
 
    while ((entry = (CacheEntry_t *)dList_nth_data(DelayedQueue, 0))) {
       Cache_ref_data(entry);
@@ -1372,10 +1287,10 @@ static void Cache_delayed_process_queue_callback(void *ptr)
       }
    }
    DelayedQueueIdleId = 0;
-   a_Timeout_remove();
+   a_Timeout_remove(Cache_delayed_process_queue_callback, NULL);
 }
 
-/**
+/*
  * Set a call to Cache_process_queue from the main cycle.
  */
 static void Cache_delayed_process_queue(CacheEntry_t *entry)
@@ -1391,9 +1306,9 @@ static void Cache_delayed_process_queue(CacheEntry_t *entry)
    }
 }
 
-/**
+/*
  * Last Client for this entry?
- * @return Client if true, NULL otherwise
+ * Return: Client if true, NULL otherwise
  * (cache.c has only one call to a capi function. This avoids a second one)
  */
 CacheClient_t *a_Cache_client_get_if_unique(int Key)
@@ -1412,7 +1327,7 @@ CacheClient_t *a_Cache_client_get_if_unique(int Key)
    return (n == 1) ? Client : NULL;
 }
 
-/**
+/*
  * Remove a client from the client queue
  * TODO: notify the dicache and upper layers
  */
@@ -1434,7 +1349,7 @@ void a_Cache_stop_client(int Key)
          dList_remove(DelayedQueue, entry);
 
       /* Main queue */
-      Cache_client_dequeue(Client);
+      Cache_client_dequeue(Client, NULLKey);
 
    } else {
       _MSG("WARNING: Cache_stop_client, nonexistent client\n");
@@ -1442,7 +1357,7 @@ void a_Cache_stop_client(int Key)
 }
 
 
-/**
+/*
  * Memory deallocator (only called at exit time)
  */
 void a_Cache_freeall(void)
@@ -1452,7 +1367,7 @@ void a_Cache_freeall(void)
 
    /* free the client queue */
    while ((Client = dList_nth_data(ClientQueue, 0)))
-      Cache_client_dequeue(Client);
+      Cache_client_dequeue(Client, NULLKey);
 
    /* Remove every cache entry */
    while ((data = dList_nth_data(CachedURLs, 0))) {

@@ -5,6 +5,7 @@
 #include <stddef.h>    /* for size_t */
 #include <stdarg.h>    /* for va_list */
 #include <string.h>    /* for strerror */
+#include <strings.h>   /* for strcasecmp, strncasecmp (POSIX 2001) */
 
 #include "d_size.h"
 
@@ -33,8 +34,6 @@ extern "C" {
 #define dIsspace(c) isspace((uchar_t)(c))
 #define dIsalnum(c) isalnum((uchar_t)(c))
 
-#define D_ASCII_TOUPPER(c) (((c) >= 'a' && (c) <= 'z') ? (c) - 0x20 : (c))
-#define D_ASCII_TOLOWER(c) (((c) >= 'A' && (c) <= 'Z') ? (c) + 0x20 : (c))
 /*
  *-- Casts -------------------------------------------------------------------
  */
@@ -87,11 +86,11 @@ char *dStrconcat(const char *s1, ...);
 char *dStrstrip(char *s);
 char *dStrnfill(size_t len, char c);
 char *dStrsep(char **orig, const char *delim);
-void dStrshred(char *s);
-char *dStriAsciiStr(const char *haystack, const char *needle);
-int dStrAsciiCasecmp(const char *s1, const char *s2);
-int dStrnAsciiCasecmp(const char *s1, const char *s2, size_t n);
+char *dStristr(const char *haystack, const char *needle);
 
+/* these are in POSIX 2001. Could be implemented if a port requires it */
+#define dStrcasecmp strcasecmp
+#define dStrncasecmp strncasecmp
 #define dStrerror strerror
 
 /*
@@ -99,7 +98,7 @@ int dStrnAsciiCasecmp(const char *s1, const char *s2, size_t n);
  */
 #define Dstr_char_t    char
 
-typedef struct {
+typedef struct _dstr {
    int sz;          /* allocated size (private) */
    int len;
    Dstr_char_t *str;
@@ -115,7 +114,6 @@ void dStr_append_l (Dstr *ds, const char *s, int l);
 void dStr_insert (Dstr *ds, int pos_0, const char *s);
 void dStr_insert_l (Dstr *ds, int pos_0, const char *s, int l);
 void dStr_truncate (Dstr *ds, int len);
-void dStr_shred (Dstr *ds);
 void dStr_erase (Dstr *ds, int pos_0, int len);
 void dStr_vsprintfa (Dstr *ds, const char *format, va_list argp);
 void dStr_vsprintf (Dstr *ds, const char *format, va_list argp);
@@ -128,11 +126,13 @@ const char *dStr_printable(Dstr *in, int maxlen);
 /*
  *-- dList --------------------------------------------------------------------
  */
-typedef struct {
+struct Dlist_ {
    int sz;          /* allocated size (private) */
    int len;
    void **list;
-} Dlist;
+};
+
+typedef struct Dlist_ Dlist;
 
 /* dCompareFunc:
  * Return: 0 if parameters are equal (for dList_find_custom).
@@ -173,11 +173,20 @@ void dLib_show_messages(bool_t show);
 /*
  *- Misc utility functions ----------------------------------------------------
  */
-char *dGetcwd(void);
-char *dGethomedir(void);
-char *dGetline(FILE *stream);
-int dClose(int fd);
-int dUsleep(unsigned long us);
+char *dGetcwd ();
+char *dGethomedir ();
+char *dGetprofdir ();
+char *dGettempdir ();
+char *dGetline (FILE *stream);
+
+/* Work around incompatible prototypes for mkdir()
+ * Windows expects one argument, most others expect two */
+#ifdef _WIN32
+#  define dMkdir(path,mode) mkdir(path)
+#else
+#  define dMkdir mkdir
+#endif
+
 
 #ifdef __cplusplus
 }

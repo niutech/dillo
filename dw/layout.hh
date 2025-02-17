@@ -17,37 +17,15 @@ class Layout: public lout::object::Object
 {
    friend class Widget;
 
-private:
-   class LayoutImgRenderer: public style::StyleImage::ExternalImgRenderer
-   {
-      Layout *layout;
-
-   public:
-      LayoutImgRenderer (Layout *layout) { this->layout = layout; }
-
-      bool readyToDraw ();
-      void getBgArea (int *x, int *y, int *width, int *height);
-      void getRefArea (int *xRef, int *yRef, int *widthRef, int *heightRef);
-      style::StyleImage *getBackgroundImage ();
-      style::BackgroundRepeat getBackgroundRepeat ();
-      style::BackgroundAttachment getBackgroundAttachment ();
-      style::Length getBackgroundPositionX ();
-      style::Length getBackgroundPositionY ();
-      void draw (int x, int y, int width, int height);
-   };
-
-   LayoutImgRenderer *layoutImgRenderer;
-
 public:
    /**
     * \brief Receiver interface different signals.
     *
-    * May be extended.
+    * May be extended
     */
    class Receiver: public lout::signal::Receiver
    {
    public:
-      virtual void resizeQueued (bool extremesChanged);
       virtual void canvasSizeChanged (int width, int ascent, int descent);
    };
 
@@ -127,7 +105,7 @@ private:
    class Emitter: public lout::signal::Emitter
    {
    private:
-      enum { RESIZE_QUEUED, CANVAS_SIZE_CHANGED };
+      enum { CANVAS_SIZE_CHANGED };
 
    protected:
       bool emitToReceiver (lout::signal::Receiver *receiver, int signalNo,
@@ -136,7 +114,6 @@ private:
    public:
       inline void connectLayout (Receiver *receiver) { connect (receiver); }
 
-      void emitResizeQueued (bool extremesChanged);
       void emitCanvasSizeChanged (int width, int ascent, int descent);
    };
 
@@ -155,15 +132,9 @@ private:
    Platform *platform;
    View *view;
    Widget *topLevel, *widgetAtPoint;
-   lout::container::typed::Vector<Widget> *queueResizeList;
 
    /* The state, which must be projected into the view. */
    style::Color *bgColor;
-   style::StyleImage *bgImage;
-   style::BackgroundRepeat bgRepeat;
-   style::BackgroundAttachment bgAttachment;
-   style::Length bgPositionX, bgPositionY;
-
    style::Cursor cursor;
    int canvasWidth, canvasAscent, canvasDescent;
 
@@ -189,8 +160,6 @@ private:
 
    enum ButtonEventType { BUTTON_PRESS, BUTTON_RELEASE, MOTION_NOTIFY };
 
-   void detachWidget (Widget *widget);
-
    Widget *getWidgetAtPoint (int x, int y);
    void moveToWidget (Widget *newWidgetAtPoint, ButtonState state);
 
@@ -207,7 +176,8 @@ private:
     */
    void moveOutOfView (ButtonState state) { moveToWidget (NULL, state); }
 
-   bool processMouseEvent (MousePositionEvent *event, ButtonEventType type);
+   bool processMouseEvent (MousePositionEvent *event, ButtonEventType type,
+                           bool mayBeSuppressed);
    bool buttonEvent (ButtonEventType type, View *view,
                      int numPressed, int x, int y, ButtonState state,
                      int button);
@@ -222,8 +192,6 @@ private:
    void adjustScrollPos ();
    static bool calcScrollInto (int targetValue, int requestedSize,
                                int *value, int viewportSize);
-   int currHScrollbarThickness();
-   int currVScrollbarThickness();
 
    void updateAnchor ();
 
@@ -238,22 +206,11 @@ private:
    void queueDraw (int x, int y, int width, int height);
    void queueDrawExcept (int x, int y, int width, int height,
       int ex, int ey, int ewidth, int eheight);
-   void queueResize (bool extremesChanged);
+   void queueResize ();
    void removeWidget ();
 
-   /* For tests regarding the respective Layout and (mostly) Widget
-      methods. Accessed by respective methods (enter..., leave...,
-      ...Entered) defined here and in Widget. */
-
-   int resizeIdleCounter, queueResizeCounter, sizeAllocateCounter,
-      sizeRequestCounter, getExtremesCounter, resizeCounter;
-   bool resizeLimit;
-
-   void enterResizeIdle () { resizeIdleCounter++; }
-   void leaveResizeIdle () { resizeIdleCounter--; }
-
 public:
-   Layout (Platform *platform, bool limit=true);
+   Layout (Platform *platform);
    ~Layout ();
 
    inline void connectLink (LinkReceiver *receiver)
@@ -282,6 +239,10 @@ public:
    void attachView (View *view);
    void detachView (View *view);
 
+#ifdef ENABLE_PRINTER
+   inline View* viewport() { return view; }
+#endif /* ENABLE_PRINTER */
+
    inline bool getUsesViewport () { return usesViewport; }
    inline int getWidthViewport () { return viewportWidth; }
    inline int getHeightViewport ()  { return viewportHeight; }
@@ -297,12 +258,7 @@ public:
 
    /* View */
 
-   inline void expose (View *view, Rectangle *area) {
-      DBG_OBJ_ENTER ("draw", 0, "expose", "%d, %d, %d * %d",
-                     area->x, area->y, area->width, area->height);
-      draw (view, area);
-      DBG_OBJ_LEAVE ();
-   }
+   inline void expose (View *view, Rectangle *area) { draw (view, area); }
 
    /**
     * \brief This function is called by a view, to delegate a button press
@@ -318,8 +274,6 @@ public:
       return buttonEvent (BUTTON_PRESS, view, numPressed, x, y, state, button);
    }
 
-   void containerSizeChanged ();
-
    /**
     * \brief This function is called by a view, to delegate a button press
     * event.
@@ -333,33 +287,18 @@ public:
                           button);
    }
 
-   bool motionNotify (View *view, int x, int y, ButtonState state);
+   bool motionNotify (View *view,  int x, int y, ButtonState state);
    void enterNotify (View *view, int x, int y, ButtonState state);
    void leaveNotify (View *view, ButtonState state);
 
    void scrollPosChanged (View *view, int x, int y);
    void viewportSizeChanged (View *view, int width, int height);
 
-   inline Platform *getPlatform ()
-   {
-      return platform;
-   }
-
    /* delegated */
 
    inline int textWidth (style::Font *font, const char *text, int len)
    {
       return platform->textWidth (font, text, len);
-   }
-
-   inline char *textToUpper (const char *text, int len)
-   {
-      return platform->textToUpper (text, len);
-   }
-
-   inline char *textToLower (const char *text, int len)
-   {
-      return platform->textToLower (text, len);
    }
 
    inline int nextGlyph (const char *text, int idx)
@@ -384,7 +323,7 @@ public:
 
    inline style::Font *createFont (style::FontAttrs *attrs, bool tryEverything)
    {
-      return platform->createFont (attrs, tryEverything);
+      return  platform->createFont (attrs, tryEverything);
    }
 
    inline bool fontExists (const char *name)
@@ -407,15 +346,19 @@ public:
       return platform->cancelTooltip ();
    }
 
-   inline Imgbuf *createImgbuf (Imgbuf::Type type, int width, int height,
-                                double gamma)
+   inline Imgbuf *createImgbuf (Imgbuf::Type type, int width, int height)
    {
-      return platform->createImgbuf (type, width, height, gamma);
+      return platform->createImgbuf (type, width, height);
    }
 
    inline void copySelection(const char *text)
    {
       platform->copySelection(text);
+   }
+
+   inline void copySelectionToClipboard()
+   {
+      platform->copySelectionToClipboard();
    }
 
    inline ui::ResourceFactory *getResourceFactory ()
@@ -435,17 +378,12 @@ public:
    inline void resetSearch () { findtextState.resetSearch (); }
 
    void setBgColor (style::Color *color);
-   void setBgImage (style::StyleImage *bgImage,
-                    style::BackgroundRepeat bgRepeat,
-                    style::BackgroundAttachment bgAttachment,
-                    style::Length bgPositionX, style::Length bgPositionY);
 
    inline style::Color* getBgColor () { return bgColor; }
-   inline style::StyleImage* getBgImage () { return bgImage; }
 };
 
-} // namespace core
 } // namespace dw
+} // namespace core
 
 #endif // __DW_LAYOUT_HH__
 

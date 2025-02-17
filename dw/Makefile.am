@@ -1,7 +1,5 @@
 AM_CPPFLAGS = \
-	-I$(top_srcdir) \
-	-DDILLO_LIBDIR='"$(pkglibdir)/"' \
-	-DCUR_WORKING_DIR='"@BASE_CUR_WORKING_DIR@/dw"'
+	-I$(top_srcdir)
 
 noinst_LIBRARIES = \
 	libDw-core.a \
@@ -14,8 +12,6 @@ libDw_core_a_SOURCES = \
 	findtext.cc \
 	findtext.hh \
 	imgbuf.hh \
-	imgrenderer.hh \
-	imgrenderer.cc \
 	iterator.cc \
 	iterator.hh \
 	layout.cc \
@@ -23,12 +19,8 @@ libDw_core_a_SOURCES = \
 	platform.hh \
 	selection.hh \
 	selection.cc \
-	stackingcontextmgr.hh \
-	stackingcontextmgr.cc \
 	style.cc \
 	style.hh \
-	tools.cc \
-	tools.hh \
 	types.cc \
 	types.hh \
 	ui.cc \
@@ -61,49 +53,21 @@ libDw_fltk_a_SOURCES = \
 libDw_fltk_a_CXXFLAGS = @LIBFLTK_CXXFLAGS@
 
 libDw_widgets_a_SOURCES = \
-	alignedtablecell.cc \
-	alignedtablecell.hh \
 	alignedtextblock.cc \
 	alignedtextblock.hh \
 	bullet.cc \
 	bullet.hh \
-	hyphenator.cc \
-	hyphenator.hh \
 	image.cc \
 	image.hh \
 	listitem.cc \
 	listitem.hh \
-	oofawarewidget.cc \
-	oofawarewidget_iterator.cc \
-	oofawarewidget.hh \
-	ooffloatsmgr.cc \
-	ooffloatsmgr.hh \
-	oofposabslikemgr.cc \
-	oofposabslikemgr.hh \
-	oofposabsmgr.cc \
-	oofposabsmgr.hh \
-	oofposfixedmgr.cc \
-	oofposfixedmgr.hh \
-	oofpositionedmgr.cc \
-	oofpositionedmgr.hh \
-	oofposrelmgr.cc \
-	oofposrelmgr.hh \
-	outofflowmgr.cc \
-	outofflowmgr.hh \
-	regardingborder.cc \
-	regardingborder.hh \
 	ruler.cc \
 	ruler.hh \
-	simpletablecell.cc \
-	simpletablecell.hh \
 	table.cc \
-	table_iterator.cc \
 	table.hh \
 	tablecell.cc \
 	tablecell.hh \
 	textblock.cc \
-	textblock_iterator.cc \
-	textblock_linebreaking.cc \
 	textblock.hh
 
 EXTRA_DIST = preview.xbm

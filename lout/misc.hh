@@ -1,23 +1,3 @@
-/*
- * Dillo Widget
- *
- * Copyright 2005-2007 Sebastian Geerken <sgeerken@dillo.org>
- * Copyright 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
-
 #ifndef __LOUT_MISC_HH__
 #define __LOUT_MISC_HH__
 
@@ -26,15 +6,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-#include "dlib/dlib.h"
 
-namespace lout {
+#ifdef min
+#  undef min
+#endif
+
+#ifdef max
+#  undef max
+#endif
 
 /**
  * \brief Miscellaneous stuff, which does not fit anywhere else.
  *
- * Actually, the other parts, beginning with \ref object, depend on this.
+ * Actually, the other parts, beginning with ::object, depend on this.
  */
+namespace lout {
+
 namespace misc {
 
 template <class T> inline T min (T a, T b) { return a < b ? a : b; }
@@ -59,53 +46,39 @@ inline void assertNotReached ()
    abort ();
 }
 
-inline void assertNotReached (const char *fmt, ...)
-{
-   va_list argp;
-   va_start(argp, fmt);
-
-   fprintf (stderr, "*** [%s] This should not happen: ", prgName);
-   vfprintf(stderr, fmt, argp);
-   fprintf (stderr, "! ***\n");
-
-   va_end(argp);
-
-   abort ();
-}
-
-inline void notImplemented (const char *name)
-{
-   fprintf (stderr, "*** [%s] Not implemented: %s ***\n", prgName, name);
-   abort ();
-}
-
 inline int roundInt(double d)
 {
    return (int) ((d > 0) ? (d + 0.5) : (d - 0.5));
 }
 
-inline int AsciiTolower(char c)
+/**
+ * \brief Instances of a sub class of this interface may be compared (less,
+ *    greater).
+ *
+ * Used for sorting etc.
+ */
+class Comparable
 {
-   return ((c >= 'A' && c <= 'Z') ? c + 0x20 : c);
-}
+public:
+    virtual ~Comparable();
 
-inline int AsciiToupper(char c)
-{
-   return ((c >= 'a' && c <= 'z') ? c - 0x20 : c);
-}
+   /**
+    * \brief Compare two objects c1 and c2.
+    *
+    * return a value < 0, when c1 is less than c2, a value > 0, when c1
+    * is greater than c2, or 0, when c1 and c2 are equal.
+    *
+    * If also object::Object is implemented, and if c1.equals(c2),
+    * c1.compareTo(c2) must be 0, but, unlike you may expect,
+    * the reversed is not necessarily true. This method returns 0, if,
+    * according to the rules for sorting, there is no difference, but there
+    * may still be differences (not relevant for sorting), which "equals" will
+    * care about.
+    */
+   virtual int compareTo(Comparable *other) = 0;
 
-inline int AsciiStrcasecmp(const char *s1, const char *s2)
-{
-   int ret = 0;
-
-   while ((*s1 || *s2) && !(ret = AsciiTolower(*s1) - AsciiTolower(*s2))) {
-      s1++;
-      s2++;
-   }
-   return ret;
-}
-
-inline const char *boolToStr (bool b) { return b ? "true" : "false"; }
+   static int compareFun(const void *p1, const void *p2);
+};
 
 /**
  * \brief Simple (simpler than container::untyped::Vector and
@@ -135,7 +108,7 @@ private:
    }
 
 public:
-   inline SimpleVector (int initAlloc = 1)
+   inline SimpleVector (int initAlloc)
    {
       this->num = 0;
       this->numAlloc = initAlloc;
@@ -159,19 +132,9 @@ public:
    /**
     * \brief Return the number of elements put into this vector.
     */
-   inline int size() const { return this->num; }
+   inline int size() { return this->num; }
 
-   inline bool empty() const { return size() == 0; }
-
-   inline T* getArray() const { return array; }
-
-   inline T* detachArray() {
-      T* arr = array;
-      array = NULL;
-      numAlloc = 0;
-      num = 0;
-      return arr;
-   }
+   inline T* getArray() { return array; }
 
    /**
     * \brief Increase the vector size by one.
@@ -208,7 +171,7 @@ public:
     *
     * \sa misc::SimpleVector::get
     */
-   inline T* getRef (int i) const {
+   inline T* getRef (int i) {
       assert (i >= 0 && this->num - i > 0);
       return array + i;
    }
@@ -219,41 +182,9 @@ public:
     * The element is copied, so for complex elements, you should rather used
     * misc::SimpleVector::getRef.
     */
-   inline T get (int i) const {
+   inline T get (int i) {
       assert (i >= 0 && this->num - i > 0);
       return this->array[i];
-   }
-
-   /**
-    * \brief Return the reference of the first element (convenience method).
-    */
-   inline T* getFirstRef () const {
-      assert (this->num > 0);
-      return this->array;
-   }
-
-   /**
-    * \brief Return the first element, explicitly.
-    */
-   inline T getFirst () const {
-      assert (this->num > 0);
-      return this->array[0];
-   }
-
-   /**
-    * \brief Return the reference of the last element (convenience method).
-    */
-   inline T* getLastRef () const {
-      assert (this->num > 0);
-      return this->array + this->num - 1;
-   }
-
-   /**
-    * \brief Return the last element, explicitly.
-    */
-   inline T getLast () const {
-      assert (this->num > 0);
-      return this->array[this->num - 1];
    }
 
    /**
@@ -268,300 +199,8 @@ public:
       assert (i >= 0 && this->num - i > 0);
       this->array[i] = t;
    }
-
-   /**
-    * \brief Store an object at the end of the vector.
-    */
-   inline void setLast (T t) {
-      assert (this->num > 0);
-      this->array[this->num - 1] = t;
-   }
-
-   /**
-    * \brief Copies some elements into another vector of the same
-    *    type.
-    *
-    * Cannot be used to copy elements within one vector. (For this,
-    * it would have to be extended to copy backwards in some cases.)
-    */
-   inline void copyTo(SimpleVector<T> *dest, int thisStart = 0,
-                      int thisLast = -1, int destStart = 0) {
-      assert (dest != this);
-      if (thisLast == -1)
-         thisLast = this->size () - 1;
-      for (int i = thisStart; i <= thisLast; i++)
-         dest->set (i - thisStart + destStart, get (i));
-   }
 };
 
-/**
- * \brief Container similar to lout::misc::SimpleVector, but some cases
- *    of insertion optimized (used for hyphenation).
- *
- * For hyphenation, words are often split, so that some space must be
- * inserted by the method NotSoSimpleVector::insert. Typically, some
- * elements are inserted quite at the beginning (when the word at the
- * end of the first or at the beginning of the second line is
- * hyphenated), then, a bit further (end of second line/beginning of
- * third line) and so on. In the first time, nearly all words must be
- * moved; in the second time, a bit less, etc. After all, using a
- * simple vector would result in O(n<sup>2</sup>) number of elements
- * moved total. With this class, however, the number can be kept at
- * O(n).
- *
- * The basic idea is to keep an extra array (actually two, of which
- * the second one is used temporarily), which is inserted in a logical
- * way. Since there is only one extra array at max, reading is rather
- * simple and fast (see NotSoSimpleVector::getRef): check whether the
- * position is before, within, or after the extra array. The first
- * insertion is also rather simple, when the extra array has to be
- * created. The following sketch illustrates the most complex case,
- * when an extra array exists, and something is inserted after it (the
- * case for which this class has been optimized):
- *
- * \image html not-so-simple-container.png
- *
- * Dotted lines are used to keep the boxes aligned.
- *
- * As you see, only a relatively small fraction of elements has to be
- * moved.
- *
- * There are some other cases, which have to be documented.
- */
-template <class T> class NotSoSimpleVector
-{
-private:
-   T *arrayMain, *arrayExtra1, *arrayExtra2;
-   int numMain, numExtra, numAllocMain, numAllocExtra, startExtra;
-
-   inline void resizeMain ()
-   {
-      /* This algorithm was tuned for memory&speed with this huge page:
-       *   http://downloads.mysql.com/docs/refman-6.0-en.html.tar.gz
-       */
-      if (arrayMain == NULL) {
-         this->numAllocMain = 1;
-         this->arrayMain = (T*) malloc (sizeof (T));
-      }
-      if (this->numAllocMain < this->numMain) {
-         this->numAllocMain = (this->numMain < 100) ?
-                          this->numMain : this->numMain + this->numMain/10;
-         this->arrayMain =
-            (T*) realloc(this->arrayMain, (this->numAllocMain * sizeof (T)));
-      }
-   }
-
-   inline void resizeExtra ()
-   {
-      /* This algorithm was tuned for memory&speed with this huge page:
-       *   http://downloads.mysql.com/docs/refman-6.0-en.html.tar.gz
-       */
-      if (arrayExtra1 == NULL) {
-         this->numAllocExtra = 1;
-         this->arrayExtra1 = (T*) malloc (sizeof (T));
-         this->arrayExtra2 = (T*) malloc (sizeof (T));
-      }
-      if (this->numAllocExtra < this->numExtra) {
-         this->numAllocExtra = (this->numExtra < 100) ?
-                          this->numExtra : this->numExtra + this->numExtra/10;
-         this->arrayExtra1 =
-            (T*) realloc(this->arrayExtra1, (this->numAllocExtra * sizeof (T)));
-         this->arrayExtra2 =
-            (T*) realloc(this->arrayExtra2, (this->numAllocExtra * sizeof (T)));
-      }
-   }
-
-   void consolidate ()
-   {
-      if (startExtra != -1) {
-         numMain += numExtra;
-         resizeMain ();
-         memmove (arrayMain + startExtra + numExtra, arrayMain + startExtra,
-                  (numMain - (startExtra + numExtra)) * sizeof (T));
-         memmove (arrayMain + startExtra, arrayExtra1, numExtra * sizeof (T));
-         startExtra = -1;
-         numExtra = 0;
-      }
-   }
-
-public:
-   inline NotSoSimpleVector (int initAlloc)
-   {
-      this->numMain = this->numExtra = 0;
-      this->numAllocMain = initAlloc;
-      this->numAllocExtra = initAlloc;
-      this->arrayMain = this->arrayExtra1 = this->arrayExtra2 = NULL;
-      this->startExtra = -1;
-   }
-
-   inline ~NotSoSimpleVector ()
-   {
-      if (this->arrayMain)
-         free (this->arrayMain);
-      if (this->arrayExtra1)
-         free (this->arrayExtra1);
-      if (this->arrayExtra2)
-         free (this->arrayExtra2);
-   }
-
-   inline int size() const { return this->numMain + this->numExtra; }
-
-   inline bool empty() const { return size() == 0; }
-
-   inline void increase() { setSize(size() + 1); }
-
-   inline void setSize(int newSize)
-   {
-      assert (newSize >= 0);
-      this->numMain = newSize - numExtra;
-      this->resizeMain ();
-   }
-
-   void insert (int index, int numInsert)
-   {
-      assert (numInsert >= 0);
-
-      // The following lines are a simple (but inefficient) replacement.
-      //setSize (numMain + numInsert);
-      //memmove (arrayMain + index + numInsert, arrayMain + index,
-      //         (numMain - index - numInsert) * sizeof (T));
-      //return;
-
-      if (this->startExtra == -1) {
-         // simple case
-         this->numExtra = numInsert;
-         this->startExtra = index;
-         resizeExtra ();
-      } else {
-         if (index < startExtra) {
-            consolidate ();
-            insert (index, numInsert);
-         } else if (index < startExtra + numExtra) {
-            int oldNumExtra = numExtra;
-            numExtra += numInsert;
-            resizeExtra ();
-
-            int toMove = startExtra + oldNumExtra - index;
-            memmove (arrayExtra1 + numExtra - toMove,
-                     arrayExtra1 + index - startExtra,
-                     toMove * sizeof (T));
-         } else {
-            int oldNumExtra = numExtra;
-            numExtra += numInsert;
-            resizeExtra ();
-
-            // Note: index refers to the *logical* address, not to the
-            // *physical* one.
-            int diff = index - this->startExtra - oldNumExtra;
-            T *arrayMainI = arrayMain + this->startExtra;
-            for (int i = diff + oldNumExtra - 1; i >= 0; i--) {
-               T *src = i < oldNumExtra ?
-                  this->arrayExtra1 + i : arrayMainI + (i - oldNumExtra);
-               T *dest = i < diff ?
-                  arrayMainI + i : arrayExtra2 + (i - diff);
-               *dest = *src;
-            }
-
-            memcpy (arrayExtra1, arrayExtra2, sizeof (T) * oldNumExtra);
-            startExtra = index - oldNumExtra;
-         }
-      }
-   }
-
-   /**
-    * \brief Return the reference of one element.
-    *
-    * \sa misc::SimpleVector::get
-    */
-   inline T* getRef (int i) const
-   {
-      if (this->startExtra == -1) {
-         assert (i >= 0 && i < this->numMain);
-         return this->arrayMain + i;
-      } else {
-         if (i < this->startExtra) {
-            assert (i >= 0);
-            return this->arrayMain + i;
-         } else if (i >= this->startExtra + this->numExtra) {
-            // The original assertion
-            ///
-            //    "assert (i < this->numMain + this->numExtra)"
-            //
-            // causes this warnung in dw::Textblock::breakAdded:
-            //
-            //    "assuming signed overflow does not occur when assuming that
-            //     (X - c) > X is always false [-Wstrict-overflow]"
-            //
-            // Subtracting numExtra from both sides solves this,
-            // interrestingly.
-
-            assert (i - this->numExtra < this->numMain);
-            return this->arrayMain + i - this->numExtra;
-         } else
-            return this->arrayExtra1 + i - this->startExtra;
-      }
-   }
-
-   /**
-    * \brief Return the one element, explicitly.
-    *
-    * The element is copied, so for complex elements, you should rather used
-    * misc::SimpleVector::getRef.
-    */
-   inline T get (int i) const
-   {
-      return *(this->getRef(i));
-   }
-
-   /**
-    * \brief Return the reference of the first element (convenience method).
-    */
-   inline T* getFirstRef () const {
-      assert (size () > 0);
-      return this->getRef(0);
-   }
-
-   /**
-    * \brief Return the first element, explicitly.
-    */
-   inline T getFirst () const {
-      return *(this->getFirstRef());
-   }
-
-   /**
-    * \brief Return the reference of the last element (convenience method).
-    */
-   inline T* getLastRef () const {
-      assert (size () > 0);
-      return this->getRef(size () - 1);
-   }
-
-   /**
-    * \brief Return the last element, explicitly.
-    */
-   inline T getLast () const {
-      return *(this->getLastRef());
-   }
-
-   /**
-    * \brief Store an object in the vector.
-    *
-    * Unlike in container::untyped::Vector and container::typed::Vector,
-    * you have to care about the size, so a call to
-    * misc::SimpleVector::increase or misc::SimpleVector::setSize may
-    * be necessary before.
-    */
-   inline void set (int i, T t) {
-      *(this->getRef(i)) = t;
-   }
-
-   /**
-    * \brief Store an object at the end of the vector.
-    */
-   inline void setLast (T t) {
-      *(this->getLastRef()) = t;
-   }
-};
 
 /**
  * \brief A class for fast concatenation of a large number of strings.
@@ -590,12 +229,7 @@ public:
     * A copy is kept in the buffer, so the caller does not have to care
     * about memory management.
     */
-   inline void append(const char *str) { appendNoCopy(dStrdup(str)); }
-   inline void appendInt(int n)
-   { char buf[32]; sprintf (buf, "%d", n); append (buf); }
-   inline void appendPointer(void *p)
-   { char buf[32]; sprintf (buf, "%p", p); append (buf); }
-   inline void appendBool(bool b) { append (b ? "true" : "false"); }
+   inline void append(const char *str) { appendNoCopy(strdup(str)); }
    void appendNoCopy(char *str);
    const char *getChars();
    void clear ();
@@ -609,7 +243,7 @@ class BitSet
 {
 private:
    unsigned char *bits;
-   int numBits, numBytes;
+   int numBytes;
 
    inline int bytesForBits(int bits) { return bits == 0 ? 1 : (bits + 7) / 8; }
 
@@ -617,7 +251,7 @@ public:
    BitSet(int initBits);
    ~BitSet();
    void intoStringBuffer(misc::StringBuffer *sb);
-   bool get(int i) const;
+   bool get(int i);
    void set(int i, bool val);
    void clear();
 };

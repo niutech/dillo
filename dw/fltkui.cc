@@ -22,9 +22,10 @@
 #include "fltkcore.hh"
 #include "fltkflatview.hh"
 #include "fltkcomplexbutton.hh"
-#include "dlib/dlib.h"
 #include "../lout/msg.h"
 #include "../lout/misc.hh"
+#include "../widgets/input.hh"
+#include "../widgets/text_editor.hh"
 
 #include <FL/Fl.H>
 #include <FL/fl_draw.H>
@@ -33,358 +34,9 @@
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Round_Button.H>
 #include <FL/Fl_Choice.H>
-#include <FL/Fl_Browser.H>
+#include <FL/Fl_Tree.H>
 
 #include <stdio.h>
-
-//----------------------------------------------------------------------------
-
-static Fl_Color fltkui_dimmed(Fl_Color c, Fl_Color bg)
-{
-   return fl_color_average(c, bg, .33f);
-};
-
-//----------------------------------------------------------------------------
-/*
- * Local sub classes
- */
-
-/*
- * Used to show optional placeholder text and to enable CTRL+{a,e,d,k} in
- * form inputs (for start,end,del,cut)
- */
-class CustInput2 : public Fl_Input {
-public:
-   CustInput2 (int x, int y, int w, int h, const char* l=0);
-   ~CustInput2 () { if (placeholder) free(placeholder); };
-   void set_placeholder(const char *str);
-   int show_placeholder();
-   int show_normal(const char *str);
-   void textcolor(Fl_Color c);
-   void input_type(int t);
-   int value(const char* str);
-   const char* value();
-   int handle(int e);
-private:
-   char *placeholder;
-   bool showing_placeholder;
-   Fl_Color usual_color;
-   int usual_type;
-};
-
-CustInput2::CustInput2 (int x, int y, int w, int h, const char* l) :
-   Fl_Input(x,y,w,h,l)
-{
-   placeholder = NULL;
-   showing_placeholder = false;
-   usual_color = FL_BLACK;      /* just init until widget style is set */
-};
-
-/*
- * Show normal text.
- */
-int CustInput2::show_normal(const char *str)
-{
-   showing_placeholder = false;
-   Fl_Input::textcolor(usual_color);
-   Fl_Input::input_type(usual_type);
-   return Fl_Input::value(str);
-}
-
-/*
- * Show the placeholder text.
- */
-int CustInput2::show_placeholder()
-{
-   int ret;
-
-   showing_placeholder = true;
-   Fl_Input::textcolor(fltkui_dimmed(usual_color, color()));
-   Fl_Input::input_type(FL_NORMAL_INPUT);
-   ret = Fl_Input::value(placeholder);
-   position(0);
-   return ret;
-}
-
-/*
- * Set the placeholder text.
- */
-void CustInput2::set_placeholder(const char *str)
-{
-   if (placeholder)
-      free(placeholder);
-   placeholder = dStrdup(str);
-
-   if ((Fl::focus() != this) && !*value()) {
-      show_placeholder();
-   }
-}
-
-/*
- * Set the text color.
- */
-void CustInput2::textcolor(Fl_Color c)
-{
-   usual_color = c;
-   if (showing_placeholder)
-      c = fltkui_dimmed(c, color());
-   Fl_Input::textcolor(c);
-}
-
-/*
- * Set the input type (normal, password, etc.)
- */
-void CustInput2::input_type(int t)
-{
-   usual_type = t;
-   Fl_Input::input_type(t);
-}
-
-/*
- * Set the value of the input.
- * NOTE that we're not being very careful with the return value, which is
- * supposed to be nonzero iff the value was changed.
- */
-int CustInput2::value(const char *str)
-{
-   return (placeholder && (!str || !*str) && Fl::focus() != this)
-          ? show_placeholder() : show_normal(str);
-}
-
-/*
- * Return the value (text) of the input.
- */
-const char* CustInput2::value()
-{
-   return showing_placeholder ? "" : Fl_Input::value();
-}
-
-int CustInput2::handle(int e)
-{
-   int rc, k = Fl::event_key();
-
-   _MSG("CustInput2::handle event=%d\n", e);
-
-   // We're only interested in some flags
-   unsigned modifier = Fl::event_state() & (FL_SHIFT | FL_CTRL | FL_ALT);
-
-   if (e == FL_KEYBOARD) {
-      if (k == FL_Page_Down || k == FL_Page_Up || k == FL_Up || k == FL_Down) {
-         // Let them through for key commands and viewport motion.
-         return 0;
-      }
-      if (modifier == FL_CTRL) {
-         if (k == 'a' || k == 'e') {
-            position(k == 'a' ? 0 : size());
-            return 1;
-         } else if (k == 'k') {
-            cut(position(), size());
-            return 1;
-         } else if (k == 'd') {
-            cut(position(), position()+1);
-            return 1;
-         } else if (k == 'h' || k == 'i' || k == 'j' || k == 'l' || k == 'm') {
-            // Fl_Input wants to use ^H as backspace, and also "insert a few
-            // selected control characters literally", but this gets in the way
-            // of key commands.
-            return 0;
-         }
-      }
-   } else if (e == FL_UNFOCUS) {
-      if (placeholder && !value()[0]) {
-         show_placeholder();
-      }
-   }
-
-   rc = Fl_Input::handle(e);
-
-   if (rc && e == FL_FOCUS) {
-      // Nonzero return from handle() should mean that focus was accepted.
-      if (showing_placeholder)
-         show_normal("");
-   }
-   return rc;
-}
-
-/*
- * Used to show optional placeholder text.
- */
-class CustTextEditor : public Fl_Text_Editor {
-public:
-   CustTextEditor (int x, int y, int w, int h, const char* l=0);
-   ~CustTextEditor ();
-   void set_placeholder(const char *str);
-   void show_placeholder();
-   void show_normal(const char *str);
-   void textcolor(Fl_Color c);
-   void value(const char* str);
-   char* value();
-   int handle(int e);
-private:
-   char *placeholder;
-   bool showing_placeholder;
-   Fl_Color usual_color;
-   char *text_copy;
-};
-
-CustTextEditor::CustTextEditor (int x, int y, int w, int h, const char* l) :
-                               Fl_Text_Editor(x,y,w,h,l)
-{
-   placeholder = NULL;
-   showing_placeholder = false;
-   buffer(new Fl_Text_Buffer());
-   usual_color = FL_BLACK;      /* just init until widget style is set */
-   text_copy = NULL;
-};
-
-CustTextEditor::~CustTextEditor ()
-{
-   Fl_Text_Buffer *buf = buffer();
-
-   buffer(NULL);
-   delete buf;
-
-   if (placeholder)
-      free(placeholder);
-   if (text_copy)
-      free(text_copy);
-}   
-
-/*
- * Show normal text.
- */
-void CustTextEditor::show_normal(const char *str)
-{
-   showing_placeholder = false;
-   Fl_Text_Editor::textcolor(usual_color);
-   buffer()->text(str);
-}
-
-/*
- * Show the placeholder text.
- */
-void CustTextEditor::show_placeholder()
-{
-   showing_placeholder = true;
-   Fl_Text_Editor::textcolor(fltkui_dimmed(usual_color, color()));
-   buffer()->text(placeholder);
-}
-
-/*
- * Set the placeholder text.
- */
-void CustTextEditor::set_placeholder(const char *str)
-{
-   if (placeholder)
-      free(placeholder);
-   placeholder = dStrdup(str);
-
-   if ((Fl::focus() != this) && buffer()->length() == 0) {
-      show_placeholder();
-   }
-}
-
-/*
- * Set the text color.
- */
-void CustTextEditor::textcolor(Fl_Color c)
-{
-   usual_color = c;
-   if (showing_placeholder)
-      c = fltkui_dimmed(c, color());
-   Fl_Text_Editor::textcolor(c);
-}
-
-/*
- * Set the value of the input.
- */
-void CustTextEditor::value(const char *str)
-{
-   if (placeholder && (!str || !*str) && Fl::focus() != this)
-      show_placeholder();
-   else
-      show_normal(str);
-}
-
-/*
- * Return the value (text) of the input.
- */
-char* CustTextEditor::value()
-{
-   /* FLTK-1.3 insists upon returning a new copy of the buffer text, so
-    * we have to keep track of it.
-    */
-   if (text_copy)
-      free(text_copy);
-   text_copy = showing_placeholder ? dStrdup("") : buffer()->text();
-   return text_copy;
-}
-
-int CustTextEditor::handle(int e)
-{
-   int rc;
-
-   if (e == FL_UNFOCUS) {
-      if (placeholder && buffer()->length() == 0) {
-         show_placeholder();
-      }
-   }
-
-   rc = Fl_Text_Editor::handle(e);
-
-   if (rc && e == FL_FOCUS) {
-      // Nonzero return from handle() should mean that focus was accepted.
-      if (showing_placeholder)
-         show_normal("");
-   }
-   return rc;
-}
-
-
-/*
- * Used to handle some keystrokes as shortcuts to option menuitems
- * (i.e. jump to the next menuitem whose label starts with the pressed key)
- */
-class CustChoice : public Fl_Choice {
-public:
-   CustChoice (int x, int y, int w, int h, const char* l=0) :
-      Fl_Choice(x,y,w,h,l) {};
-   int handle(int e);
-};
-
-int CustChoice::handle(int e)
-{
-   int k = Fl::event_key();
-   unsigned modifier = Fl::event_state() & (FL_SHIFT|FL_CTRL|FL_ALT|FL_META);
-
-   _MSG("CustChoice::handle %p e=%d active=%d focus=%d\n",
-       this, e, active(), (Fl::focus() == this));
-   if (Fl::focus() != this) {
-      ; // Not Focused, let FLTK handle it
-   } else if (e == FL_KEYDOWN && modifier == 0) {
-      if (k == FL_Enter || k == FL_Down) {
-         return Fl_Choice::handle(FL_PUSH); // activate menu
-
-      } else if (isalnum(k)) { // try key as shortcut to menuitem
-         int t = value()+1 >= size() ? 0 : value()+1;
-         while (t != value()) {
-             const Fl_Menu_Item *mi = &(menu()[t]);
-             if (mi->submenu()) // submenu?
-                ;
-             else if (mi->label() && mi->active()) { // menu item?
-                if (k == tolower(mi->label()[0])) {
-                   value(mi);
-                   return 1; // Let FLTK know we used this key
-                }
-             }
-             if (++t == size())
-                t = 0;
-         }
-      }
-   }
-
-   return Fl_Choice::handle(e);
-}
 
 //----------------------------------------------------------------------------
 
@@ -399,8 +51,6 @@ using namespace lout::container::typed;
 
 FltkResource::FltkResource (FltkPlatform *platform)
 {
-   DBG_OBJ_CREATE ("dw::fltk::ui::FltkResource");
-
    this->platform = platform;
 
    allocation.x = 0;
@@ -436,8 +86,6 @@ FltkResource::~FltkResource ()
    }
    if (style)
       style->unref ();
-
-   DBG_OBJ_DELETE ();
 }
 
 void FltkResource::attachView (FltkView *view)
@@ -461,24 +109,17 @@ void FltkResource::detachView (FltkView *view)
 {
    if (this->view != view)
       MSG_ERR("FltkResource::detachView: this->view: %p view: %p\n",
-              (void *) this->view, (void *) view);
+              this->view, view);
    this->view = NULL;
 }
 
 void FltkResource::sizeAllocate (core::Allocation *allocation)
 {
-   DBG_OBJ_ENTER ("resize", 0, "sizeAllocate", "%d, %d; %d * (%d + %d)",
-                  allocation->x, allocation->y, allocation->width,
-                  allocation->ascent, allocation->descent);
-
    this->allocation = *allocation;
    view->allocateFltkWidget (widget, allocation);
-
-   DBG_OBJ_LEAVE ();
 }
 
-void FltkResource::draw (core::View *view, core::Rectangle *area,
-                         core::DrawingContext *context)
+void FltkResource::draw (core::View *view, core::Rectangle *area)
 {
    FltkView *fltkView = (FltkView*)view;
    if (fltkView->usesFltkWidgets () && this->view == fltkView) {
@@ -558,20 +199,6 @@ void FltkResource::setEnabled (bool enabled)
 
 // ----------------------------------------------------------------------
 
-template <class I> FltkSpecificResource<I>::FltkSpecificResource (FltkPlatform
-                                                                  *platform) :
-   FltkResource (platform)
-{
-   DBG_OBJ_CREATE ("dw::fltk::ui::FltkSpecificResource<>");
-   DBG_OBJ_BASECLASS (I);
-   DBG_OBJ_BASECLASS (FltkResource);
-}
-
-template <class I> FltkSpecificResource<I>::~FltkSpecificResource ()
-{
-   DBG_OBJ_DELETE ();
-}
-
 template <class I> void FltkSpecificResource<I>::sizeAllocate (core::Allocation
                                                                *allocation)
 {
@@ -579,11 +206,9 @@ template <class I> void FltkSpecificResource<I>::sizeAllocate (core::Allocation
 }
 
 template <class I> void FltkSpecificResource<I>::draw (core::View *view,
-                                                       core::Rectangle *area,
-                                                       core::DrawingContext
-                                                       *context)
+                                                       core::Rectangle *area)
 {
-   FltkResource::draw (view, area, context);
+   FltkResource::draw (view, area);
 }
 
 template <class I> void FltkSpecificResource<I>::setStyle (core::style::Style
@@ -604,29 +229,11 @@ template <class I> void FltkSpecificResource<I>::setEnabled (bool enabled)
 
 // ----------------------------------------------------------------------
 
-class EnterButton : public Fl_Button {
-public:
-   EnterButton (int x,int y,int w,int h, const char* label = 0) :
-      Fl_Button (x,y,w,h,label) {};
-   int handle(int e);
-};
-
-int EnterButton::handle(int e)
-{
-   if (e == FL_KEYBOARD && Fl::focus() == this && Fl::event_key() == FL_Enter){
-      set_changed();
-      simulate_key_action();
-      do_callback();
-      return 1;
-   }
-   return Fl_Button::handle(e);
-}
-
 FltkLabelButtonResource::FltkLabelButtonResource (FltkPlatform *platform,
                                                   const char *label):
    FltkSpecificResource <dw::core::ui::LabelButtonResource> (platform)
 {
-   this->label = dStrdup (label);
+   this->label = strdup (label);
    init (platform);
 }
 
@@ -639,8 +246,9 @@ Fl_Widget *FltkLabelButtonResource::createNewWidget (core::Allocation
                                                      *allocation)
 {
    Fl_Button *button =
-        new EnterButton (allocation->x, allocation->y, allocation->width,
-                         allocation->ascent + allocation->descent, label);
+        new Fl_Button (allocation->x, allocation->y, allocation->width,
+                       allocation->ascent + allocation->descent, label);
+   button->labeltype (FL_FREE_LABELTYPE);
    button->callback (widgetCallback, this);
    button->when (FL_WHEN_RELEASE);
    return button;
@@ -648,8 +256,6 @@ Fl_Widget *FltkLabelButtonResource::createNewWidget (core::Allocation
 
 void FltkLabelButtonResource::sizeRequest (core::Requisition *requisition)
 {
-   DBG_OBJ_ENTER0 ("resize", 0, "sizeRequest");
-
    if (style) {
       FltkFont *font = (FltkFont*)style->font;
       fl_font(font->font,font->size);
@@ -663,10 +269,6 @@ void FltkLabelButtonResource::sizeRequest (core::Requisition *requisition)
       requisition->ascent = 1;
       requisition->descent = 0;
    }
-
-   DBG_OBJ_MSGF ("resize", 1, "result: %d * (%d + %d)",
-                 requisition->width, requisition->ascent, requisition->descent);
-   DBG_OBJ_LEAVE ();
 }
 
 /*
@@ -718,7 +320,7 @@ const char *FltkLabelButtonResource::getLabel ()
 void FltkLabelButtonResource::setLabel (const char *label)
 {
    free((char *)this->label);
-   this->label = dStrdup (label);
+   this->label = strdup (label);
 
    widget->label (this->label);
    queueResize (true);
@@ -746,34 +348,11 @@ void FltkComplexButtonResource::widgetCallback (Fl_Widget *widget,
 {
    FltkComplexButtonResource *res = (FltkComplexButtonResource*)data;
 
-   if (Fl::event() == FL_RELEASE && Fl::event_button() != FL_RIGHT_MOUSE) {
-      int w = widget->w(), h = widget->h();
-
-      res->click_x = Fl::event_x() - widget->x();
-      res->click_y = Fl::event_y() - widget->y();
-      if (res->style) {
-         res->click_x -= res->style->boxOffsetX();
-         res->click_y -= res->style->boxOffsetY();
-         w -= res->style->boxDiffWidth();
-         h -= res->style->boxDiffHeight();
-      }
-      if (res->click_x >= 0 && res->click_y >= 0 &&
-          res->click_x < w && res->click_y < h) {
-         dw::core::EventButton event;
-         setButtonEvent(&event);
-         res->emitClicked(&event);
-      }
-   } else if (Fl::event() == FL_KEYBOARD) {
-      // Simulate a click.
+   if (!Fl::event_button3()) {
+      res->click_x = Fl::event_x();
+      res->click_y = Fl::event_y();
       dw::core::EventButton event;
-
-      res->click_x = res->click_y = 0;
-      event.xCanvas = widget->x() + res->style->boxOffsetX();
-      event.yCanvas = widget->y() + res->style->boxOffsetY();
-      // ButtonState doesn't have mouse button values on a release.
-      event.state = (core::ButtonState) 0;
-      event.button = 1;
-      event.numPressed = 1;
+      setButtonEvent(&event);
       res->emitClicked(&event);
    }
 }
@@ -799,17 +378,6 @@ void FltkComplexButtonResource::detachView (FltkView *view)
 void FltkComplexButtonResource::sizeAllocate (core::Allocation *allocation)
 {
    FltkResource::sizeAllocate (allocation);
-
-   DBG_OBJ_MSGF_O ("resize", 0, flatView,
-                   "<b>resize</b> (%d %d, <i>%d - 2 * %d =</i> %d, "
-                   "<i>%d + %d - 2 * %d =</i> %d)",
-                   reliefXThickness (), reliefYThickness (),
-                   allocation->width, reliefXThickness (),
-                   allocation->width - 2 * reliefXThickness (),
-                   allocation->ascent, allocation->descent,
-                   reliefYThickness (),
-                   allocation->ascent + allocation->descent
-                   - 2 * reliefYThickness ());
 
    ((FltkFlatView*)flatView)->resize (
       reliefXThickness (), reliefYThickness (),
@@ -844,7 +412,7 @@ Fl_Widget *FltkComplexButtonResource::createNewWidget (core::Allocation
    button->callback (widgetCallback, this);
    button->when (FL_WHEN_RELEASE);
    if (!relief)
-      button->box(FL_NO_BOX);
+      button->box(FL_FLAT_BOX);
 
    flatView = new FltkFlatView (allocation->x + reliefXThickness (),
                                 allocation->y + reliefYThickness (),
@@ -860,16 +428,14 @@ Fl_Widget *FltkComplexButtonResource::createNewWidget (core::Allocation
 
 // ----------------------------------------------------------------------
 
-FltkEntryResource::FltkEntryResource (FltkPlatform *platform, int size,
-                                      bool password, const char *label,
-                                      const char *placeholder):
+FltkEntryResource::FltkEntryResource (FltkPlatform *platform, int maxLength,
+                                      bool password, const char *label):
    FltkSpecificResource <dw::core::ui::EntryResource> (platform)
 {
-   this->size = size;
+   this->maxLength = maxLength;
    this->password = password;
-   this->label = label ? dStrdup(label) : NULL;
+   this->label = label ? strdup(label) : NULL;
    this->label_w = 0;
-   this->placeholder = placeholder ? dStrdup(placeholder) : NULL;
 
    initText = NULL;
    editable = false;
@@ -883,17 +449,16 @@ FltkEntryResource::~FltkEntryResource ()
       free((char *)initText);
    if (label)
       free(label);
-   if (placeholder)
-      free(placeholder);
 }
 
 Fl_Widget *FltkEntryResource::createNewWidget (core::Allocation
                                                     *allocation)
 {
-   CustInput2 *input =
-        new CustInput2(allocation->x, allocation->y, allocation->width,
-                      allocation->ascent + allocation->descent);
-   input->input_type(password ? FL_SECRET_INPUT : FL_NORMAL_INPUT);
+   Fl_Input *input =
+        new D_Input(allocation->x, allocation->y, allocation->width,
+                    allocation->ascent + allocation->descent);
+   if (password)
+      input->type(FL_SECRET_INPUT);
    input->callback (widgetCallback, this);
    input->when (FL_WHEN_ENTER_KEY_ALWAYS);
 
@@ -903,8 +468,6 @@ Fl_Widget *FltkEntryResource::createNewWidget (core::Allocation
    }
    if (initText)
       input->value (initText);
-   if (placeholder)
-      input->set_placeholder(placeholder);
 
    return input;
 }
@@ -912,12 +475,12 @@ Fl_Widget *FltkEntryResource::createNewWidget (core::Allocation
 void FltkEntryResource::setWidgetStyle (Fl_Widget *widget,
                                         core::style::Style *style)
 {
-   CustInput2 *in = (CustInput2 *)widget;
+   Fl_Input *in = (Fl_Input *)widget;
 
    FltkResource::setWidgetStyle(widget, style);
 
    in->textcolor(widget->labelcolor());
-   in->cursor_color(widget->labelcolor());
+   in->cursor_color(in->textcolor());
    in->textsize(in->labelsize());
    in->textfont(in->labelfont());
 
@@ -937,16 +500,14 @@ void FltkEntryResource::setDisplayed(bool displayed)
 
 void FltkEntryResource::sizeRequest (core::Requisition *requisition)
 {
-   DBG_OBJ_ENTER0 ("resize", 0, "sizeRequest");
-
    if (displayed() && style) {
       FltkFont *font = (FltkFont*)style->font;
       fl_font(font->font,font->size);
-      // WORKAROUND: A bug with fl_width(uint_t) on non-xft X was present in
-      // 1.3.0 (STR #2688).
+      /* WORKAROUND: fl_width(uint_t) is not working on non-xft X.
+       * Reported to FLTK as STR #2688 */
       requisition->width =
          (int)fl_width ("n")
-         * (size == UNLIMITED_SIZE ? 10 : size)
+         * (maxLength == UNLIMITED_MAX_LENGTH ? 10 : maxLength)
          + label_w + (2 * RELIEF_X_THICKNESS);
       requisition->ascent = font->ascent + RELIEF_Y_THICKNESS;
       requisition->descent = font->descent + RELIEF_Y_THICKNESS;
@@ -955,10 +516,6 @@ void FltkEntryResource::sizeRequest (core::Requisition *requisition)
       requisition->ascent = 0;
       requisition->descent = 0;
    }
-
-   DBG_OBJ_MSGF ("resize", 1, "result: %d * (%d + %d)",
-                 requisition->width, requisition->ascent, requisition->descent);
-   DBG_OBJ_LEAVE ();
 }
 
 void FltkEntryResource::sizeAllocate (core::Allocation *allocation)
@@ -966,11 +523,6 @@ void FltkEntryResource::sizeAllocate (core::Allocation *allocation)
    if (!label) {
       FltkResource::sizeAllocate(allocation);
    } else {
-      DBG_OBJ_MSGF ("resize", 0,
-                    "<b>sizeAllocate</b> (%d, %d; %d * (%d + %d))",
-                    allocation->x, allocation->y, allocation->width,
-                    allocation->ascent, allocation->descent);
-
       this->allocation = *allocation;
 
       /* push the Fl_Input over to the right of the label */
@@ -988,16 +540,16 @@ void FltkEntryResource::widgetCallback (Fl_Widget *widget, void *data)
 
 const char *FltkEntryResource::getText ()
 {
-   return ((CustInput2*)widget)->value ();
+   return ((Fl_Input*)widget)->value ();
 }
 
 void FltkEntryResource::setText (const char *text)
 {
    if (initText)
       free((char *)initText);
-   initText = dStrdup (text);
+   initText = strdup (text);
 
-   ((CustInput2*)widget)->value (initText);
+   ((Fl_Input*)widget)->value (initText);
 }
 
 bool FltkEntryResource::isEditable ()
@@ -1010,39 +562,18 @@ void FltkEntryResource::setEditable (bool editable)
    this->editable = editable;
 }
 
-void FltkEntryResource::setMaxLength (int maxlen)
-{
-   ((Fl_Input *)widget)->maximum_size(maxlen);
-}
-
 // ----------------------------------------------------------------------
 
-static int kf_backspace_word (int c, Fl_Text_Editor *e)
-{
-   int p1, p2 = e->insert_position();
-
-   e->previous_word();
-   p1 = e->insert_position();
-   e->buffer()->remove(p1, p2);
-   e->show_insert_position();
-   e->set_changed();
-   if (e->when() & FL_WHEN_CHANGED)
-      e->do_callback();
-   return 0;
-}
-
 FltkMultiLineTextResource::FltkMultiLineTextResource (FltkPlatform *platform,
-                                                      int cols, int rows,
-                                                      const char *placeholder):
+                                                      int cols, int rows):
    FltkSpecificResource <dw::core::ui::MultiLineTextResource> (platform)
 {
+   buffer = new Fl_Text_Buffer;
+   text_copy = NULL;
    editable = false;
 
    numCols = cols;
    numRows = rows;
-
-   DBG_OBJ_SET_NUM ("numCols", numCols);
-   DBG_OBJ_SET_NUM ("numRows", numRows);
 
    // Check values. Upper bound check is left to the caller.
    if (numCols < 1) {
@@ -1053,54 +584,50 @@ FltkMultiLineTextResource::FltkMultiLineTextResource (FltkPlatform *platform,
       MSG_WARN("numRows = %d is set to 1.\n", numRows);
       numRows = 1;
    }
-   this->placeholder = placeholder ? dStrdup(placeholder) : NULL;
 
    init (platform);
 }
 
 FltkMultiLineTextResource::~FltkMultiLineTextResource ()
 {
-   if (placeholder)
-      free(placeholder);
+   /* Free memory avoiding a double-free of text buffers */
+   ((Fl_Text_Editor *) widget)->buffer (0);
+   delete buffer;
+   if (text_copy)
+      free(text_copy);
 }
 
 Fl_Widget *FltkMultiLineTextResource::createNewWidget (core::Allocation
                                                             *allocation)
 {
-   CustTextEditor *text =
-      new CustTextEditor (allocation->x, allocation->y, allocation->width,
-                          allocation->ascent + allocation->descent);
+   Fl_Text_Editor *text =
+      new D_Text_Editor (allocation->x, allocation->y, allocation->width,
+                         allocation->ascent + allocation->descent);
    text->wrap_mode(Fl_Text_Display::WRAP_AT_BOUNDS, 0);
-   text->remove_key_binding(FL_BackSpace, FL_TEXT_EDITOR_ANY_STATE);
-   text->add_key_binding(FL_BackSpace, 0, Fl_Text_Editor::kf_backspace);
-   text->add_key_binding(FL_BackSpace, FL_CTRL, kf_backspace_word);
-   if (placeholder)
-      text->set_placeholder(placeholder);
+   text->buffer (buffer);
    return text;
 }
 
 void FltkMultiLineTextResource::setWidgetStyle (Fl_Widget *widget,
                                                 core::style::Style *style)
 {
-   CustTextEditor *ed = (CustTextEditor *)widget;
+   Fl_Text_Editor *ed = (Fl_Text_Editor *)widget;
 
    FltkResource::setWidgetStyle(widget, style);
 
    ed->textcolor(widget->labelcolor());
-   ed->cursor_color(widget->labelcolor());
+   ed->cursor_color(ed->textcolor());
    ed->textsize(ed->labelsize());
    ed->textfont(ed->labelfont());
 }
 
 void FltkMultiLineTextResource::sizeRequest (core::Requisition *requisition)
 {
-   DBG_OBJ_ENTER0 ("resize", 0, "sizeRequest");
-
    if (style) {
       FltkFont *font = (FltkFont*)style->font;
       fl_font(font->font,font->size);
-      // WORKAROUND: A bug with fl_width(uint_t) on non-xft X was present in
-      // 1.3.0 (STR #2688).
+      /* WORKAROUND: fl_width(uint_t) is not working on non-xft X.
+       * Reported to FLTK as STR #2688 */
       requisition->width =
          (int)fl_width ("n") * numCols + 2 * RELIEF_X_THICKNESS;
       requisition->ascent =
@@ -1114,20 +641,22 @@ void FltkMultiLineTextResource::sizeRequest (core::Requisition *requisition)
       requisition->ascent = 1;
       requisition->descent = 0;
    }
-
-   DBG_OBJ_MSGF ("resize", 1, "result: %d * (%d + %d)",
-                 requisition->width, requisition->ascent, requisition->descent);
-   DBG_OBJ_LEAVE ();
 }
 
 const char *FltkMultiLineTextResource::getText ()
 {
-   return ((CustTextEditor*)widget)->value ();
+   /* FLTK-1.3 insists upon returning a new copy of the buffer text, so
+    * we have to keep track of it.
+    */
+   if (text_copy)
+      free(text_copy);
+   text_copy = buffer->text();
+   return text_copy;
 }
 
 void FltkMultiLineTextResource::setText (const char *text)
 {
-   ((CustTextEditor*)widget)->value (text);
+   buffer->text (text);
 }
 
 bool FltkMultiLineTextResource::isEditable ()
@@ -1179,8 +708,6 @@ void FltkToggleButtonResource<I>::setWidgetStyle (Fl_Widget *widget,
 template <class I>
 void FltkToggleButtonResource<I>::sizeRequest (core::Requisition *requisition)
 {
-   DBG_OBJ_ENTER0 ("resize", 0, "sizeRequest");
-
    FltkFont *font = (FltkFont *)
       (this->FltkResource::style ? this->FltkResource::style->font : NULL);
 
@@ -1194,15 +721,11 @@ void FltkToggleButtonResource<I>::sizeRequest (core::Requisition *requisition)
       requisition->ascent = 1;
       requisition->descent = 0;
    }
-
-   DBG_OBJ_MSGF ("resize", 1, "result: %d * (%d + %d)",
-                 requisition->width, requisition->ascent, requisition->descent);
-   DBG_OBJ_LEAVE ();
 }
 
 
 template <class I>
-bool FltkToggleButtonResource<I>::isActivated ()
+bool FltkToggleButtonResource<I>::FltkToggleButtonResource::isActivated ()
 {
    return ((Fl_Button*)this->widget)->value ();
 }
@@ -1237,6 +760,7 @@ Fl_Button *FltkCheckButtonResource::createNewButton (core::Allocation
    Fl_Check_Button *cb =
       new Fl_Check_Button (allocation->x, allocation->y, allocation->width,
                            allocation->ascent + allocation->descent);
+   cb->labeltype (FL_FREE_LABELTYPE);
    return cb;
 }
 
@@ -1348,6 +872,7 @@ Fl_Button *FltkRadioButtonResource::createNewButton (core::Allocation
    Fl_Button *button =
       new Fl_Round_Button (allocation->x, allocation->y, allocation->width,
                            allocation->ascent + allocation->descent);
+   button->labeltype (FL_FREE_LABELTYPE);
    button->when (FL_WHEN_CHANGED);
    button->callback (widgetCallback, this);
    button->type (FL_TOGGLE_BUTTON);
@@ -1377,6 +902,7 @@ FltkOptionMenuResource::FltkOptionMenuResource (FltkPlatform *platform):
    menu = new Fl_Menu_Item[itemsAllocated];
    memset(menu, 0, itemsAllocated * sizeof(Fl_Menu_Item));
    itemsUsed = 1; // menu[0].text == NULL, which is an end-of-menu marker.
+   visibleItems = 0;
 
    init (platform);
 }
@@ -1406,9 +932,9 @@ Fl_Widget *FltkOptionMenuResource::createNewWidget (core::Allocation
                                                      *allocation)
 {
    Fl_Choice *choice =
-      new CustChoice (allocation->x, allocation->y,
-                      allocation->width,
-                      allocation->ascent + allocation->descent);
+      new Fl_Choice (allocation->x, allocation->y,
+                          allocation->width,
+                          allocation->ascent + allocation->descent);
    choice->menu(menu);
    return choice;
 }
@@ -1427,7 +953,7 @@ int FltkOptionMenuResource::getMaxItemWidth()
       const char *str = menu[i].text;
 
       if (str) {
-         width = fl_width(str);
+         width = (int)fl_width(str);
          if (width > max)
             max = width;
       }
@@ -1437,8 +963,6 @@ int FltkOptionMenuResource::getMaxItemWidth()
 
 void FltkOptionMenuResource::sizeRequest (core::Requisition *requisition)
 {
-   DBG_OBJ_ENTER0 ("resize", 0, "sizeRequest");
-
    if (style) {
       FltkFont *font = (FltkFont*)style->font;
       fl_font(font->font, font->size);
@@ -1453,10 +977,6 @@ void FltkOptionMenuResource::sizeRequest (core::Requisition *requisition)
       requisition->ascent = 1;
       requisition->descent = 0;
    }
-
-   DBG_OBJ_MSGF ("resize", 1, "result: %d * (%d + %d)",
-                 requisition->width, requisition->ascent, requisition->descent);
-   DBG_OBJ_LEAVE ();
 }
 
 void FltkOptionMenuResource::enlargeMenu ()
@@ -1493,7 +1013,9 @@ void FltkOptionMenuResource::addItem (const char *str,
 {
    Fl_Menu_Item *item = newItem();
 
-   item->text = dStrdup(str);
+   item->text = strdup(str);
+   item->argument(visibleItems++);
+   item->labeltype(FL_FREE_LABELTYPE);
 
    if (enabled == false)
       item->flags = FL_MENU_INACTIVE;
@@ -1504,17 +1026,12 @@ void FltkOptionMenuResource::addItem (const char *str,
    queueResize (true);
 }
 
-void FltkOptionMenuResource::setItem (int index, bool selected)
-{
-   if (selected)
-      ((Fl_Choice *)widget)->value(menu+index);
-}
-
 void FltkOptionMenuResource::pushGroup (const char *name, bool enabled)
 {
    Fl_Menu_Item *item = newItem();
 
-   item->text = dStrdup(name);
+   item->text = strdup(name);
+   item->argument(visibleItems++);
 
    if (enabled == false)
       item->flags = FL_MENU_INACTIVE;
@@ -1533,7 +1050,7 @@ void FltkOptionMenuResource::popGroup ()
 
 bool FltkOptionMenuResource::isSelected (int index)
 {
-   return index == ((Fl_Choice *)widget)->value();
+   return index == (long) ((Fl_Choice *)widget)->mvalue()->user_data();
 }
 
 int FltkOptionMenuResource::getNumberOfItems()
@@ -1543,38 +1060,11 @@ int FltkOptionMenuResource::getNumberOfItems()
 
 // ----------------------------------------------------------------------
 
-class CustBrowser : public Fl_Browser {
-public:
-   CustBrowser(int x, int y, int w, int h) : Fl_Browser(x, y, w, h) {};
-   int full_width() const;
-   int full_height() const {return Fl_Browser::full_height();}
-   int avg_height() {return size() ? Fl_Browser_::incr_height() : 0;}
-};
-
-/*
- * Fl_Browser_ has a full_width(), but it has a tendency to contain 0, so...
- */
-int CustBrowser::full_width() const
-{
-   int max = 0;
-   void *item = item_first();
-
-   while (item) {
-      int w = item_width(item);
-
-      if (w > max)
-         max = w;
-
-      item = item_next(item);
-   }
-   return max;
-}
-
 FltkListResource::FltkListResource (FltkPlatform *platform,
                                     core::ui::ListResource::SelectionMode
                                     selectionMode, int rowCount):
    FltkSelectionResource <dw::core::ui::ListResource> (platform),
-   currDepth(0)
+   itemsSelected(8)
 {
    mode = selectionMode;
    showRows = rowCount;
@@ -1588,188 +1078,143 @@ FltkListResource::~FltkListResource ()
 
 Fl_Widget *FltkListResource::createNewWidget (core::Allocation *allocation)
 {
-   CustBrowser *b =
-      new CustBrowser (allocation->x, allocation->y, allocation->width,
-                      allocation->ascent + allocation->descent);
+   Fl_Tree *tree =
+      new Fl_Tree (allocation->x, allocation->y, allocation->width,
+                           allocation->ascent + allocation->descent);
 
-   b->type((mode == SELECTION_MULTIPLE) ? FL_MULTI_BROWSER : FL_HOLD_BROWSER);
-   b->callback(widgetCallback, this);
-   b->when(FL_WHEN_CHANGED);
-   b->column_widths(colWidths);
-   b->column_char('\a');   // I just chose a nonprinting character.
+   tree->selectmode((mode == SELECTION_MULTIPLE) ? FL_TREE_SELECT_MULTI
+                                                 : FL_TREE_SELECT_SINGLE);
+   tree->showroot(0);
+   tree->connectorstyle(FL_TREE_CONNECTOR_NONE);
+   tree->marginleft(-14);
+   tree->callback(widgetCallback,this);
+   tree->when(FL_WHEN_CHANGED);
 
-   return b;
+   currParent = tree->root();
+   return tree;
 }
 
 void FltkListResource::setWidgetStyle (Fl_Widget *widget,
                                        core::style::Style *style)
 {
-   Fl_Browser *b = (Fl_Browser *)widget;
+   Fl_Tree *t = (Fl_Tree *)widget;
 
    FltkResource::setWidgetStyle(widget, style);
 
-   b->textfont(widget->labelfont());
-   b->textsize(widget->labelsize());
-   b->textcolor(widget->labelcolor());
-
-   colWidths[0] = b->textsize();
-   colWidths[1] = colWidths[0];
-   colWidths[2] = colWidths[0];
-   colWidths[3] = 0;
+   t->item_labelfont(widget->labelfont());
+   t->item_labelsize(widget->labelsize());
+   t->item_labelfgcolor(widget->labelcolor());
+   t->item_labelbgcolor(widget->color());
 }
 
 void FltkListResource::widgetCallback (Fl_Widget *widget, void *data)
 {
-   Fl_Browser *b = (Fl_Browser *) widget;
-
-   if (b->selected(b->value())) {
-      /* If it shouldn't be selectable, deselect it again. It would be nice to
-       * have a less unpleasant way to do this.
-       */
-      const char *inactive_code;
-      if ((inactive_code = strstr(b->text(b->value()), "@N"))) {
-         const char *ignore_codes = strstr(b->text(b->value()), "@.");
-
-         if (inactive_code < ignore_codes)
-            b->select(b->value(), 0);
-      }
+   Fl_Tree_Item *fltkItem = ((Fl_Tree *) widget)->callback_item ();
+   int index = -1;
+   if (fltkItem)
+      index = (long) (fltkItem->user_data ());
+   if (index > -1) {
+      FltkListResource *res = (FltkListResource *) data;
+      bool selected = fltkItem->is_selected ();
+      res->itemsSelected.set (index, selected);
    }
 }
 
 void *FltkListResource::newItem (const char *str, bool enabled, bool selected)
 {
-   Fl_Browser *b = (Fl_Browser *) widget;
-   int index = b->size() + 1;
-   char *label = (char *)malloc(strlen(str) + 1 + currDepth + 4),
-        *s = label;
+   Fl_Tree *tree = (Fl_Tree *) widget;
+   Fl_Tree_Item *parent = (Fl_Tree_Item *)currParent;
+   Fl_Tree_Item *item = tree->add(parent, str);
+   int index = itemsSelected.size();
 
-   memset(s, '\a', currDepth);
-   s += currDepth;
-   if (!enabled) {
-      // FL_INACTIVE_COLOR
-      *s++ = '@';
-      *s++ = 'N';
-   }
-   // ignore further '@' chars
-   *s++ = '@';
-   *s++ = '.';
+   enabled &= parent->is_active();
+   item->activate(enabled);
+   item->user_data((void*)(long)index);
+   itemsSelected.increase ();
+   itemsSelected.set (itemsSelected.size() - 1, selected);
 
-   strcpy(s, str);
-
-   b->add(label);
-   free(label);
-
-   if (selected) {
-      b->select(index, selected);
-      if (b->type() == FL_HOLD_BROWSER) {
-         /* Left to its own devices, it sometimes has some suboptimal ideas
-          * about how to scroll, and sometimes doesn't seem to show everything
-          * where it thinks it is.
-          */
-         if (index > showRows) {
-            /* bottomline() and middleline() don't work because the widget is
-             * too tiny at this point for the bbox() call in
-             * Fl_Browser::lineposition() to do what one would want.
-             */
-            b->topline(index - showRows + 1);
-         } else {
-            b->topline(1);
-         }
-      }
-   }
-   queueResize (true);
-   return NULL;
+   return item;
 }
 
 void FltkListResource::addItem (const char *str, bool enabled, bool selected)
 {
-   // Fl_Browser_::incr_height() for item height won't do the right thing if
-   // the first item doesn't have anything to it.
-   if (!str || !*str)
-      str = " ";
-   newItem(str, enabled, selected);
-}
+   Fl_Tree *tree = (Fl_Tree *) widget;
+   Fl_Tree_Item *item = (Fl_Tree_Item *) newItem(str, enabled, selected);
 
-void FltkListResource::setItem (int index, bool selected)
-{
-   Fl_Browser *b = (Fl_Browser *) widget;
-
-   b->select(index + 1, selected);
+   if (selected) {
+      if (mode == SELECTION_MULTIPLE) {
+         item->select(selected);
+      } else {
+         const bool do_callback = true;
+         tree->select_only(item, do_callback);
+      }
+   }
+   queueResize (true);
 }
 
 void FltkListResource::pushGroup (const char *name, bool enabled)
 {
-   bool en = false;
    bool selected = false;
 
-   // Fl_Browser_::incr_height() for item height won't do the right thing if
-   // the first item doesn't have anything to it.
-   if (!name || !*name)
-      name = " ";
-
-   // TODO: Proper disabling of item groups
-   newItem(name, en, selected);
-
-   if (currDepth < 3)
-      currDepth++;
+   /* TODO: make it impossible to select a group */
+   currParent = (Fl_Tree_Item *) newItem(name, enabled, selected);
+   queueResize (true);
 }
 
 void FltkListResource::popGroup ()
 {
-   CustBrowser *b = (CustBrowser *) widget;
+   Fl_Tree_Item *p = (Fl_Tree_Item *)currParent;
 
-   newItem(" ", false, false);
-   b->hide(b->size());
-
-   if (currDepth)
-      currDepth--;
+   if (p->parent())
+      currParent = p->parent();
 }
 
 int FltkListResource::getMaxItemWidth()
 {
-   return ((CustBrowser *) widget)->full_width();
+   Fl_Tree *tree = (Fl_Tree *)widget;
+   int max = 0;
+
+   for (Fl_Tree_Item *i = tree->first(); i; i = tree->next(i)) {
+      int width = 0;
+
+      if (i == tree->root())
+         continue;
+
+      for (Fl_Tree_Item *p = i->parent(); p != tree->root(); p = p->parent())
+         width += tree->connectorwidth();
+
+      if (i->label())
+         width += (int)fl_width(i->label());
+
+      if (width > max)
+         max = width;
+   }
+   return max;
 }
 
 void FltkListResource::sizeRequest (core::Requisition *requisition)
 {
-   DBG_OBJ_ENTER0 ("resize", 0, "sizeRequest");
-
    if (style) {
-      CustBrowser *b = (CustBrowser *) widget;
-      int height = b->full_height();
-      requisition->width = getMaxItemWidth() + 4;
-
-      if (showRows * b->avg_height() < height) {
-         height = showRows * b->avg_height();
-         b->has_scrollbar(Fl_Browser_::VERTICAL_ALWAYS);
-         requisition->width += Fl::scrollbar_size();
-      } else {
-         b->has_scrollbar(0);
+      FltkFont *font = (FltkFont*)style->font;
+      fl_font(font->font,font->size);
+      int rows = getNumberOfItems();
+      if (showRows < rows) {
+         rows = showRows;
       }
-
-      requisition->descent = style->font->descent + 2;
-      requisition->ascent = height - style->font->descent + 2;
+      requisition->width = getMaxItemWidth() + 5 + Fl::scrollbar_size();;
+      requisition->ascent = font->ascent + 5 +
+                            (rows - 1) * (font->ascent + font->descent + 1);
+      requisition->descent = font->descent + 3;
    } else {
       requisition->width = 1;
       requisition->ascent = 1;
       requisition->descent = 0;
    }
-
-   DBG_OBJ_MSGF ("resize", 1, "result: %d * (%d + %d)",
-                 requisition->width, requisition->ascent, requisition->descent);
-   DBG_OBJ_LEAVE ();
-}
-
-int FltkListResource::getNumberOfItems()
-{
-   return ((Fl_Browser*)widget)->size();
 }
 
 bool FltkListResource::isSelected (int index)
 {
-   Fl_Browser *b = (Fl_Browser *) widget;
-
-   return b->selected(index + 1) ? true : false;
+   return itemsSelected.get (index);
 }
 
 } // namespace ui

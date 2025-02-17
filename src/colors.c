@@ -62,7 +62,6 @@ static const struct key {
    { "darkgoldenrod", 0xb8860b},
    { "darkgray", 0xa9a9a9},
    { "darkgreen", 0x006400},
-   { "darkgrey", 0xa9a9a9},
    { "darkkhaki", 0xbdb76b},
    { "darkmagenta", 0x8b008b},
    { "darkolivegreen", 0x556b2f},
@@ -73,13 +72,11 @@ static const struct key {
    { "darkseagreen", 0x8fbc8f},
    { "darkslateblue", 0x483d8b},
    { "darkslategray", 0x2f4f4f},
-   { "darkslategrey", 0x2f4f4f},
    { "darkturquoise", 0x00ced1},
    { "darkviolet", 0x9400d3},
    { "deeppink", 0xff1493},
    { "deepskyblue", 0x00bfff},
    { "dimgray", 0x696969},
-   { "dimgrey", 0x696969},
    { "dodgerblue", 0x1e90ff},
    { "firebrick", 0xb22222},
    { "floralwhite", 0xfffaf0},
@@ -96,7 +93,6 @@ static const struct key {
    { "green", 0x008000},
 #ifdef EXTENDED_COLOR
    { "greenyellow", 0xadff2f},
-   { "grey", 0x808080},
    { "honeydew", 0xf0fff0},
    { "hotpink", 0xff69b4},
    { "indianred", 0xcd5c5c},
@@ -111,7 +107,6 @@ static const struct key {
    { "lightcoral", 0xf08080},
    { "lightcyan", 0xe0ffff},
    { "lightgoldenrodyellow", 0xfafad2},
-   { "lightgray", 0xd3d3d3},
    { "lightgreen", 0x90ee90},
    { "lightgrey", 0xd3d3d3},
    { "lightpink", 0xffb6c1},
@@ -119,7 +114,6 @@ static const struct key {
    { "lightseagreen", 0x20b2aa},
    { "lightskyblue", 0x87cefa},
    { "lightslategray", 0x778899},
-   { "lightslategrey", 0x778899},
    { "lightsteelblue", 0xb0c4de},
    { "lightyellow", 0xffffe0},
 #endif
@@ -184,7 +178,6 @@ static const struct key {
    { "skyblue", 0x87ceeb},
    { "slateblue", 0x6a5acd},
    { "slategray", 0x708090},
-   { "slategrey", 0x708090},
    { "snow", 0xfffafa},
    { "springgreen", 0x00ff7f},
    { "steelblue", 0x4682b4},
@@ -208,14 +201,14 @@ static const struct key {
 #endif
 };
 
-#define NCOLORS   (sizeof(color_keyword) / sizeof(color_keyword[0]))
+#define NCOLORS   (sizeof(color_keyword) / sizeof(struct key))
 
-/**
- * Parse a color in hex (RRGGBB) or (RGB).
+/*
+ * Parse a color in hex (RRGGBB) or (RGB)
  *
- * @return
- *  - parsed color if successful (err = 0),
- *  - default_color on error (err = 1).
+ * Return Value:
+ *   parsed color if successful (err = 0),
+ *   default_color on error (err = 1).
  */
 static int32_t Color_parse_hex (const char *s, int32_t default_color, int *err)
 {
@@ -237,32 +230,23 @@ static int32_t Color_parse_hex (const char *s, int32_t default_color, int *err)
   return ret_color;
 }
 
-/**
- * Parse a color string.
+/*
+ * Parse the color info from a subtag.
+ * If subtag string begins with # or with 0x simply return the color number
+ * otherwise search one color from the set of named colors.
  *
- * - If the string begins with # or with 0x, return the color number
- *   (with 'RGB' expanded to 'RRGGBB').
- * - Else search the set of named colors.
- * - As a last resort, treat it as bare hex as in the first case.
- *
- * @return
- *  -  Parsed color if successful,
- *  -  default_color on error.
- *
- * "err" argument:
- *   - 0 if a color beginning with '#' is successfully parsed
- *      or the color is a recognized word.
- *   - 1 if the color is bare hex or can't be parsed at all.
- *   - 2 if a color beginning with 0[xX] is successfully parsed.
+ * Return Value:
+ *    Parsed color if successful,
+ *    default_color (+ error code) on error.
  */
-int32_t a_Color_parse (const char *str, int32_t default_color, int *err)
+int32_t a_Color_parse (const char *subtag, int32_t default_color, int *err)
 {
    const char *cp;
    int32_t ret_color;
    int ret, low, mid, high, st = 1;
 
    /* skip leading spaces */
-   for (cp = str; dIsspace(*cp); cp++);
+   for (cp = subtag; dIsspace(*cp); cp++);
 
    ret_color = default_color;
    if (*cp == '#') {
@@ -270,15 +254,15 @@ int32_t a_Color_parse (const char *str, int32_t default_color, int *err)
 
    } else if (*cp == '0' && (cp[1] == 'x' || cp[1] == 'X') ) {
       ret_color = Color_parse_hex(cp + 2, default_color, &st);
-      if (!st)
-         st = 2;
+      st = 2;
+
    } else {
       /* Binary search */
       low = 0;
       high = NCOLORS - 1;
       while (low <= high) {
          mid = (low + high) / 2;
-         if ((ret = dStrAsciiCasecmp(cp, color_keyword[mid].key)) < 0)
+         if ((ret = dStrcasecmp(cp, color_keyword[mid].key)) < 0)
             high = mid - 1;
          else if (ret > 0)
             low = mid + 1;
@@ -296,7 +280,7 @@ int32_t a_Color_parse (const char *str, int32_t default_color, int *err)
       }
    }
 
-   _MSG("color string: %s\n", str);
+   _MSG("subtag: %s\n", subtag);
    _MSG("color :  %X\n", ret_color);
 
    *err = st;
@@ -310,7 +294,7 @@ int32_t a_Color_parse (const char *str, int32_t default_color, int *err)
 static int Color_distance(long c1, long c2)
 {
    return (labs((c1 & 0x0000ff) - (c2 & 0x0000ff)) +
-           labs(((c1 & 0x00ff00) - (c2 & 0x00ff00)) >> 8) +
+           labs(((c1 & 0x00ff00) - (c2 & 0x00ff00)) >> 8)  +
            labs(((c1 & 0xff0000) - (c2 & 0xff0000)) >> 16)) / 75;
 }
 #endif
@@ -335,11 +319,11 @@ static int Color_distance3(long c1, long c2)
           (labs((c1 & 0xff0000) - (c2 & 0xff0000)) >= 0x400000);
 }
 
-/**
+/*
  * Return a suitable "visited link" color
- * @return
- *   - if candidate has good contrast with C_txt, C_lnk and C_bg  -> candidate
- *   - else another color (from the internal list)
+ * Return value:
+ *   if candidate has good contrast with C_txt, C_lnk and C_bg  -> candidate
+ *   else another color (from the internal list)
  */
 int32_t a_Color_vc(int32_t candidate,
                    int32_t C_txt, int32_t C_lnk, int32_t C_bg)

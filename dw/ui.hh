@@ -20,9 +20,8 @@ namespace core {
  * \dot
  * digraph G {
  *    node [shape=record, fontname=Helvetica, fontsize=10];
- *    edge [arrowhead="none", arrowtail="empty", dir="both",
- *          labelfontname=Helvetica, labelfontsize=10, color="#404040",
- *          labelfontcolor="#000080"];
+ *    edge [arrowhead="none", arrowtail="empty", labelfontname=Helvetica,
+ *          labelfontsize=10, color="#404040", labelfontcolor="#000080"];
  *    fontname=Helvetica; fontsize=10;
  *
  *    subgraph cluster_core {
@@ -107,14 +106,14 @@ namespace core {
  * <h3>...</h3>
  *
  *
- * <h3>Resources needed for HTML</h3>
+ * <h3>Resouces needed for HTML</h3>
  *
  * This chapter describes, how the form controls defined by HTML are
  * implemented in Dw. Some of them do not refer to UI resources, but to
  * other widgets, links to the respective documentations are provided
  * here.
  *
- * <h4>Resources created with \<INPUT\></h4>
+ * <h4>Resouces created with \<INPUT\></h4>
  *
  * The HTML \<INPUT\> is always implemented by using UI
  * resources. \<INPUT\> element has the following attributes:
@@ -228,22 +227,9 @@ private:
    Resource *resource;
 
 protected:
-   void sizeRequestSimpl (Requisition *requisition);
-   void getExtremesSimpl (Extremes *extremes);
+   void sizeRequestImpl (Requisition *requisition);
+   void getExtremesImpl (Extremes *extremes);
    void sizeAllocateImpl (Allocation *allocation);
-
-   int getAvailWidthOfChild (Widget *child, bool forceValue);
-   int getAvailHeightOfChild (Widget *child, bool forceValue);
-   void correctRequisitionOfChild (Widget *child,
-                                   Requisition *requisition,
-                                   void (*splitHeightFun) (int, int*, int*),
-                                   bool allowDecreaseWidth,
-                                   bool allowDecreaseHeight);
-   void correctExtremesOfChild (Widget *child, Extremes *extremes,
-                                bool useAdjustmentWidth);
-
-   void containerSizeChangedForChildren ();
-
    void enterNotifyImpl (core::EventCrossing *event);
    void leaveNotifyImpl (core::EventCrossing *event);
    bool buttonPressImpl (core::EventButton *event);
@@ -254,30 +240,18 @@ public:
    Embed(Resource *resource);
    ~Embed();
 
+   void setWidth (int width);
+   void setAscent (int ascent);
+   void setDescent (int descent);
    void setDisplayed (bool displayed);
    void setEnabled (bool enabled);
-   void draw (View *view, Rectangle *area, DrawingContext *context);
+   void draw (View *view, Rectangle *area);
    Iterator *iterator (Content::Type mask, bool atEnd);
    void setStyle (style::Style *style);
 
+   inline void setUsesHints () { setFlags (USES_HINTS); }
+
    inline Resource *getResource () { return resource; }
-
-   inline void correctReqWidthOfChildNoRec (Widget *child,
-                                            Requisition *requisition,
-                                            bool allowDecreaseWidth)
-   { Widget::correctReqWidthOfChild (child, requisition, allowDecreaseWidth); }
-
-   inline void correctReqHeightOfChildNoRec (Widget *child,
-                                             Requisition *requisition,
-                                             void (*splitHeightFun) (int, int*,
-                                                                     int*),
-                                             bool allowDecreaseHeight)
-   { Widget::correctReqHeightOfChild (child, requisition, splitHeightFun,
-                                      allowDecreaseHeight); }
-
-   virtual void correctExtremesOfChildNoRec (Widget *child, Extremes *extremes,
-                                             bool useAdjustmentWidth)
-   { Widget::correctExtremesOfChild (child, extremes, useAdjustmentWidth); }
 };
 
 /**
@@ -354,29 +328,18 @@ protected:
       clickedEmitter.emitClicked (this, event); }
 
 public:
-   inline Resource ()
-   { embed = NULL; DBG_OBJ_CREATE ("dw::core::ui::Resource"); }
+   inline Resource () { embed = NULL; }
 
    virtual ~Resource ();
 
    virtual void sizeRequest (Requisition *requisition) = 0;
    virtual void getExtremes (Extremes *extremes);
    virtual void sizeAllocate (Allocation *allocation);
-
-   virtual int getAvailWidthOfChild (Widget *child, bool forceValue);
-   virtual int getAvailHeightOfChild (Widget *child, bool forceValue);
-   virtual void correctRequisitionOfChild (Widget *child,
-                                           Requisition *requisition,
-                                           void (*splitHeightFun) (int, int*,
-                                                                   int*),
-                                           bool allowDecreaseWidth,
-                                           bool allowDecreaseHeight);
-   virtual void correctExtremesOfChild (Widget *child, Extremes *extremes,
-                                        bool useAdjustmentWidth);
-   virtual void containerSizeChangedForChildren ();
-
+   virtual void setWidth (int width);
+   virtual void setAscent (int ascent);
+   virtual void setDescent (int descent);
    virtual void setDisplayed (bool displayed);
-   virtual void draw (View *view, Rectangle *area, DrawingContext *context);
+   virtual void draw (View *view, Rectangle *area);
    virtual Iterator *iterator (Content::Type mask, bool atEnd) = 0;
    virtual void setStyle (style::Style *style);
 
@@ -413,7 +376,7 @@ private:
    public:
       ComplexButtonResource *resource;
 
-      void resizeQueued (bool extremesChanged);
+      void canvasSizeChanged (int width, int ascent, int descent);
    };
 
    friend class LayoutReceiver;
@@ -442,18 +405,9 @@ public:
    void sizeRequest (Requisition *requisition);
    void getExtremes (Extremes *extremes);
    void sizeAllocate (Allocation *allocation);
-
-   int getAvailWidthOfChild (Widget *child, bool forceValue);
-   int getAvailHeightOfChild (Widget *child, bool forceValue);
-   void correctRequisitionOfChild (Widget *child,
-                                   Requisition *requisition,
-                                   void (*splitHeightFun) (int, int*, int*),
-                                   bool allowDecreaseWidth,
-                                   bool allowDecreaseHeight);
-   void correctExtremesOfChild (Widget *child, Extremes *extremes,
-                                bool useAdjustmentWidth);
-   void containerSizeChangedForChildren ();
-
+   void setWidth (int width);
+   void setAscent (int ascent);
+   void setDescent (int descent);
    Iterator *iterator (Content::Type mask, bool atEnd);
    int getClickX () {return click_x;};
    int getClickY () {return click_y;};
@@ -467,7 +421,6 @@ class SelectionResource: public Resource
 {
 public:
    virtual void addItem (const char *str, bool enabled, bool selected) = 0;
-   virtual void setItem (int index, bool selected) = 0;
    virtual void pushGroup (const char *name, bool enabled) = 0;
    virtual void popGroup () = 0;
 
@@ -527,8 +480,7 @@ public:
 class EntryResource: public TextResource
 {
 public:
-   enum { UNLIMITED_SIZE = -1 };
-   virtual void setMaxLength (int maxlen) = 0;
+   enum { UNLIMITED_MAX_LENGTH = -1 };
 };
 
 class MultiLineTextResource: public TextResource
@@ -588,12 +540,10 @@ public:
    virtual ListResource *createListResource (ListResource::SelectionMode
                                              selectionMode, int rows) = 0;
    virtual OptionMenuResource *createOptionMenuResource () = 0;
-   virtual EntryResource *createEntryResource (int size, bool password,
-                                               const char *label,
-                                               const char *placeholder) = 0;
+   virtual EntryResource *createEntryResource (int maxLength, bool password,
+                                               const char *label) = 0;
    virtual MultiLineTextResource *createMultiLineTextResource (int cols,
-                                                               int rows,
-                                                  const char *placeholder) = 0;
+                                                               int rows) = 0;
    virtual CheckButtonResource *createCheckButtonResource (bool activated) = 0;
    virtual RadioButtonResource *createRadioButtonResource (RadioButtonResource
                                                            *groupedWith,

@@ -16,7 +16,7 @@ namespace core {
  *
  * \sa dw::core::Widget::iterator
  */
-class Iterator: public lout::object::Comparable
+class Iterator: public lout::object::Object, public lout::misc::Comparable
 {
 protected:
    Iterator(Widget *widget, Content::Type mask, bool atEnd);
@@ -31,7 +31,6 @@ private:
 
 public:
    bool equals (Object *other);
-   void intoStringBuffer(lout::misc::StringBuffer *sb);
 
    inline Widget *getWidget () { return widget; }
    inline Content *getContent () { return &content; }
@@ -102,7 +101,7 @@ public:
    EmptyIterator (Widget *widget, Content::Type mask, bool atEnd);
 
    lout::object::Object *clone();
-   int compareTo(lout::object::Comparable *other);
+   int compareTo(lout::misc::Comparable *other);
    bool next ();
    bool prev ();
    void highlight (int start, int end, HighlightLayer layer);
@@ -127,7 +126,7 @@ public:
    TextIterator (Widget *widget, Content::Type mask, bool atEnd,
                  const char *text);
 
-   int compareTo(lout::object::Comparable *other);
+   int compareTo(lout::misc::Comparable *other);
 
    bool next ();
    bool prev ();
@@ -143,7 +142,7 @@ public:
  * iterators do not have the limitation, that iteration is only done within
  * a widget, instead, child widgets are iterated through recursively.
  */
-class DeepIterator: public lout::object::Comparable
+class DeepIterator: public lout::object::Object, public lout::misc::Comparable
 {
 private:
    class Stack: public lout::container::typed::Vector<Iterator>
@@ -169,16 +168,6 @@ private:
 
    inline DeepIterator () { }
 
-   static Widget *getRespectiveParent (Widget *widget, Content::Type mask);
-   inline Widget *getRespectiveParent (Widget *widget) {
-      return getRespectiveParent (widget, mask);
-   }
-
-   static int getRespectiveLevel (Widget *widget, Content::Type mask);
-   inline int getRespectiveLevel (Widget *widget) {
-      return getRespectiveLevel (widget, mask);
-   }
-
 public:
    DeepIterator(Iterator *it);
    ~DeepIterator();
@@ -194,7 +183,7 @@ public:
    bool next ();
    bool prev ();
    inline DeepIterator *cloneDeepIterator() { return (DeepIterator*)clone(); }
-   int compareTo(lout::object::Comparable *other);
+   int compareTo(lout::misc::Comparable *other);
 
    /**
     * \brief Highlight a part of the current content.
@@ -227,7 +216,7 @@ public:
                          start, end, hpos, vpos); }
 };
 
-class CharIterator: public lout::object::Comparable
+class CharIterator: public lout::object::Object, public lout::misc::Comparable
 {
 public:
    // START and END must not clash with any char value
@@ -241,11 +230,11 @@ private:
    CharIterator ();
 
 public:
-   CharIterator (Widget *widget, bool followReferences);
+   CharIterator (Widget *widget);
    ~CharIterator ();
 
    lout::object::Object *clone();
-   int compareTo(lout::object::Comparable *other);
+   int compareTo(lout::misc::Comparable *other);
 
    bool next ();
    bool prev ();
@@ -263,7 +252,7 @@ public:
                             hpos, vpos); }
 };
 
-} // namespace core
 } // namespace dw
+} // namespace core
 
 #endif // __ITERATOR_HH__

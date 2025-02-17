@@ -1,7 +1,7 @@
 /*
  * Dillo Widget
  *
- * Copyright 2014 Sebastian Geerken <sgeerken@dillo.org>
+ * Copyright 2005-2007 Sebastian Geerken <sgeerken@dillo.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,113 +17,92 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "tablecell.hh"
-#include "table.hh"
 
-using namespace lout;
+
+#include "tablecell.hh"
+#include <stdio.h>
 
 namespace dw {
 
-/**
- * \brief Provided some common implementations of virtual widget
- *    methods.
- *
- * Once I understand how diamond inheritance works, a class TableCell
- * will be provided, from which SimpleTableCell and AlignedTableCell
- * will inherit, additionally (in a multiple way).
- */
-namespace tablecell {
+int TableCell::CLASS_ID = -1;
 
-bool getAdjustMinWidth ()
+TableCell::TableCell (TableCell *ref, bool limitTextWidth):
+   AlignedTextblock (limitTextWidth)
 {
-   return Table::getAdjustTableMinWidth ();
+   registerName ("dw::TableCell", &CLASS_ID);
+
+   /** \bug ignoreLine1OffsetSometimes does not work? */
+   //ignoreLine1OffsetSometimes = true;
+   charWordIndex = -1;
+   setRefTextblock (ref);
+   setButtonSensitive(true);
 }
 
-bool isBlockLevel ()
+TableCell::~TableCell()
 {
-   return false;
 }
 
-int correctAvailWidthOfChild (core::Widget *widget, core::Widget *child,
-                              int width, bool forceValue)
+void TableCell::wordWrap(int wordIndex)
 {
-   DBG_OBJ_ENTER_O ("resize", 0, widget, "tablecell::correctAvailWidthOfChild",
-                    "%p, %d, %s", child, width, forceValue ? "true" : "false");
+   Textblock::Word *word;
+   const char *p;
 
-   // Make sure that this width does not exceed the width of the table
-   // cell (minus margin/border/padding).
+   Textblock::wordWrap (wordIndex);
 
-   if (width != -1) {
-      int thisWidth = widget->getAvailWidth (forceValue);
-      DBG_OBJ_MSGF_O ("resize", 1, widget, "thisWidth = %d", thisWidth);
-      if (thisWidth != -1)
-         width =
-            lout::misc::max (lout::misc::min (width,
-                                              thisWidth
-                                              - widget->boxDiffWidth ()),
-                             0);
+   if (charWordIndex == -1) {
+      word = words->getRef (wordIndex);
+      if (word->content.type == core::Content::TEXT) {
+         if ((p = strchr (word->content.text,
+                          word->style->textAlignChar))) {
+            charWordIndex = wordIndex;
+            charWordPos = p - word->content.text + 1;
+         } else if (word->style->textAlignChar == ' ' &&
+                    word->content.space) {
+            charWordIndex = wordIndex + 1;
+            charWordPos = 0;
+         }
+      }
    }
 
-   DBG_OBJ_MSGF_O ("resize", 1, widget, "=> %d", width);
-   DBG_OBJ_LEAVE_O (widget);
-   return width;
+   if (wordIndex == charWordIndex)
+      updateValue ();
 }
 
-int correctAvailHeightOfChild (core::Widget *widget, core::Widget *child,
-                               int height, bool forceValue)
+int TableCell::getValue ()
 {
-   // Something to do?
-   return height;
+   Textblock::Word *word;
+   int i, wordIndex;
+   int w;
+
+   if (charWordIndex == -1)
+      wordIndex = words->size () -1;
+   else
+      wordIndex = charWordIndex;
+
+   w = 0;
+   for (i = 0; i < wordIndex; i++) {
+      word = words->getRef (i);
+      w += word->size.width + word->origSpace;
+   }
+
+   if (charWordIndex == -1) {
+      if (words->size () > 0) {
+         word = words->getRef (words->size () - 1);
+         w += word->size.width;
+      }
+   } else {
+      word = words->getRef (charWordIndex);
+      w += layout->textWidth (word->style->font, word->content.text,
+                              charWordPos);
+   }
+
+   return w;
 }
 
-void correctCorrectedRequisitionOfChild (core::Widget *widget,
-                                         core::Widget *child,
-                                         core::Requisition *requisition,
-                                         void (*splitHeightFun) (int, int*,
-                                                                 int*),
-                                         bool allowDecreaseWidth,
-                                         bool allowDecreaseHeight)
+void TableCell::setMaxValue (int maxValue, int value)
 {
-   DBG_OBJ_ENTER_O ("resize", 0, widget, "tablecell::correctRequisitionOfChild",
-                    "%p, %d * (%d + %d), ..., %s, %s",
-                    child, requisition->width, requisition->ascent,
-                    requisition->descent, misc::boolToStr (allowDecreaseWidth),
-                    misc::boolToStr (allowDecreaseHeight));
-
-   // Make sure that this width does not exceed the width of the table
-   // cell (minus margin/border/padding).
-
-   int thisWidth = widget->getAvailWidth (true);
-   DBG_OBJ_MSGF_O ("resize", 1, widget, "thisWidth = %d", thisWidth);
-   int newWidth =
-      lout::misc::max (lout::misc::min (requisition->width,
-                                        thisWidth - widget->boxDiffWidth ()),
-                       0);
-   requisition->width = allowDecreaseWidth ?
-      newWidth : misc::max (requisition->width, newWidth);
-
-   DBG_OBJ_LEAVE_O (widget);
+   line1Offset = maxValue - value;
+   queueResize (0, true);
 }
-
-void correctCorrectedExtremesOfChild (core::Widget *widget, core::Widget *child,
-                                      core::Extremes *extremes,
-                                      bool useAdjustmentWidth)
-{
-   // Something to do?
-}
-
-int applyPerWidth (core::Widget *widget, int containerWidth,
-                   core::style::Length perWidth)
-{
-   return core::style::multiplyWithPerLength (containerWidth, perWidth);
-}
-
-int applyPerHeight (core::Widget *widget, int containerHeight,
-                    core::style::Length perHeight)
-{
-   return core::style::multiplyWithPerLength (containerHeight, perHeight);
-}
-
-} // namespace dw
 
 } // namespace dw

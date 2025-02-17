@@ -2,7 +2,6 @@
  * File: web.cc
  *
  * Copyright 2005-2007 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,7 +17,7 @@
 #include "IO/IO.h"
 #include "IO/mime.h"
 
-#include "dw/core.hh"
+#include "../dw/core.hh"
 #include "styleengine.hh"
 #include "web.hh"
 
@@ -40,7 +39,7 @@ void a_Web_init(void)
    ValidWebs = dList_new(32);
 }
 
-/**
+/*
  * Given the MIME content type, and a fd to read it from,
  * this function connects the proper MIME viewer to it.
  * Return value:
@@ -54,14 +53,10 @@ int a_Web_dispatch_by_type (const char *Type, DilloWeb *Web,
 
    _MSG("a_Web_dispatch_by_type\n");
 
-   BrowserWindow *bw = Web->bw;
-   dReturn_val_if_fail(bw != NULL, -1);
+   dReturn_val_if_fail(Web->bw != NULL, -1);
 
-   Layout *layout = (Layout*)bw->render_layout;
-
-   Viewer_t viewer = a_Mime_get_viewer(Type);
-   if (viewer == NULL)
-      return -1;
+   // get the Layout object from the bw structure.
+   Layout *layout = (Layout*)Web->bw->render_layout;
 
    if (Web->flags & WEB_RootUrl) {
       /* We have RootUrl! */
@@ -69,20 +64,16 @@ int a_Web_dispatch_by_type (const char *Type, DilloWeb *Web,
       style::Color *bgColor = style::Color::create (layout, prefs.bg_color);
       Web->bgColor = bgColor->getColor ();
       layout->setBgColor (bgColor);
-      layout->setBgImage (NULL, style::BACKGROUND_REPEAT,
-                          style::BACKGROUND_ATTACHMENT_SCROLL,
-                          style::createPerLength (0),
-                          style::createPerLength (0));
 
       /* Set a style for the widget */
-      StyleEngine styleEngine (layout, Web->url, Web->url, bw->zoom);
-      styleEngine.startElement ("body", Web->bw);
+      StyleEngine styleEngine (layout);
+      styleEngine.startElement ("body");
 
-      dw = (Widget*) viewer(Type, Web, Call, Data);
+      dw = (Widget*) a_Mime_set_viewer(Type, Web, Call, Data);
       if (dw == NULL)
          return -1;
 
-      dw->setStyle (styleEngine.style (Web->bw));
+      dw->setStyle (styleEngine.style ());
 
       /* This method frees the old dw if any */
       layout->setWidget(dw);
@@ -104,8 +95,8 @@ int a_Web_dispatch_by_type (const char *Type, DilloWeb *Web,
 
    } else {
       /* A non-RootUrl. At this moment we only handle image-children */
-      if (!dStrnAsciiCasecmp(Type, "image/", 6)) {
-         dw = (Widget*) viewer(Type, Web, Call, Data);
+      if (!dStrncasecmp(Type, "image/", 6)) {
+         dw = (Widget*) a_Mime_set_viewer(Type, Web, Call, Data);
       } else {
          MSG_HTTP("'%s' cannot be displayed as image; has media type '%s'\n",
                   URL_STR(Web->url), Type);
@@ -115,22 +106,21 @@ int a_Web_dispatch_by_type (const char *Type, DilloWeb *Web,
 }
 
 
-/**
+/*
  * Allocate and set safe values for a DilloWeb structure
  */
-DilloWeb* a_Web_new(BrowserWindow *bw, const DilloUrl *url,
-                    const DilloUrl *requester)
+DilloWeb* a_Web_new(const DilloUrl *url, const DilloUrl *requester)
 {
    DilloWeb *web= dNew(DilloWeb, 1);
 
    _MSG(" a_Web_new: ValidWebs ==> %d\n", dList_length(ValidWebs));
    web->url = a_Url_dup(url);
    web->requester = a_Url_dup(requester);
-   web->bw = bw;
+   web->bw = NULL;
    web->flags = 0;
    web->Image = NULL;
    web->filename = NULL;
-   web->stream = NULL;
+   web->stream  = NULL;
    web->SavedBytes = 0;
    web->bgColor = 0x000000; /* Dummy value will be overwritten
                              * in a_Web_dispatch_by_type. */
@@ -138,7 +128,7 @@ DilloWeb* a_Web_new(BrowserWindow *bw, const DilloUrl *url,
    return web;
 }
 
-/**
+/*
  * Validate a DilloWeb pointer
  */
 int a_Web_valid(DilloWeb *web)
@@ -146,7 +136,7 @@ int a_Web_valid(DilloWeb *web)
    return (dList_find(ValidWebs, web) != NULL);
 }
 
-/**
+/*
  * Deallocate a DilloWeb structure
  */
 void a_Web_free(DilloWeb *web)

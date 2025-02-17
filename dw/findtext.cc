@@ -20,8 +20,6 @@
 
 
 #include "core.hh"
-#include "dlib/dlib.h"
-#include "../lout/debug.hh"
 #include "../lout/msg.h"
 
 namespace dw {
@@ -29,8 +27,6 @@ namespace core {
 
 FindtextState::FindtextState ()
 {
-   DBG_OBJ_CREATE ("dw::core::FindtextState");
-
    key = NULL;
    nexttab = NULL;
    widget = NULL;
@@ -48,8 +44,6 @@ FindtextState::~FindtextState ()
       delete iterator;
    if (hlIterator)
       delete hlIterator;
-
-   DBG_OBJ_DELETE ();
 }
 
 void FindtextState::setWidget (Widget *widget)
@@ -88,7 +82,7 @@ FindtextState::Result FindtextState::search (const char *key, bool caseSens,
       newKey = true;
       if (this->key)
          free(this->key);
-      this->key = dStrdup (key);
+      this->key = strdup (key);
       this->caseSens = caseSens;
 
       if (nexttab)
@@ -97,7 +91,7 @@ FindtextState::Result FindtextState::search (const char *key, bool caseSens,
 
       if (iterator)
          delete iterator;
-      iterator = new CharIterator (widget, true);
+      iterator = new CharIterator (widget);
 
       if (backwards) {
          /* Go to end */
@@ -129,7 +123,7 @@ FindtextState::Result FindtextState::search (const char *key, bool caseSens,
       } else {
          // Nothing found anymore, reset the state for the next trial.
          delete iterator;
-         iterator = new CharIterator (widget, true);
+         iterator = new CharIterator (widget);
          if (backwards) {
             /* Go to end */
             while (iterator->next ()) ;
@@ -222,7 +216,7 @@ bool FindtextState::unhighlight ()
       return false;
 }
 
-bool FindtextState::search0 (bool backwards, bool firstTrial)
+bool FindtextState::search0 (bool backwards,  bool firstTrial)
 {
    if (iterator->getChar () == CharIterator::END)
       return false;
@@ -294,5 +288,5 @@ bool FindtextState::search0 (bool backwards, bool firstTrial)
    return ret;
 }
 
-} // namespace core
 } // namespace dw
+} // namespace core

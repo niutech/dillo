@@ -1,36 +1,33 @@
 AM_CPPFLAGS= \
 	-I$(top_srcdir) \
 	-DDILLO_SYSCONF='"$(sysconfdir)/"' \
-	-DDILLO_DOCDIR='"$(docdir)/"' \
-	-DCUR_WORKING_DIR='"@BASE_CUR_WORKING_DIR@/src"' \
 	@LIBJPEG_CPPFLAGS@
-
 AM_CFLAGS = @LIBPNG_CFLAGS@
-AM_CXXFLAGS = @LIBPNG_CFLAGS@ @LIBFLTK_CXXFLAGS@
+AM_CXXFLAGS = @LIBPNG_CFLAGS@ @CURL_CFLAGS@ @LIBFLTK_CXXFLAGS@
 
 SUBDIRS = IO
 
-bin_PROGRAMS = dillo
+bin_PROGRAMS = dplus
 
-dillo_LDADD = \
+dplus_LDADD = \
 	$(top_builddir)/dlib/libDlib.a \
-	$(top_builddir)/dpip/libDpip.a \
 	IO/libDiof.a \
 	$(top_builddir)/dw/libDw-widgets.a \
 	$(top_builddir)/dw/libDw-fltk.a \
 	$(top_builddir)/dw/libDw-core.a \
+	$(top_builddir)/widgets/libDP-widgets.a \
 	$(top_builddir)/lout/liblout.a \
-	@LIBJPEG_LIBS@ @LIBPNG_LIBS@ @LIBWEBP_LIBS@ @LIBFLTK_LIBS@ @LIBZ_LIBS@ \
-	@LIBICONV_LIBS@ @LIBPTHREAD_LIBS@ @LIBX11_LIBS@ @LIBSSL_LIBS@
+	@LIBJPEG_LIBS@ @LIBPNG_LIBS@ @LIBFLTK_LIBS@ @LIBZ_LIBS@ \
+	@LIBICONV_LIBS@ @LIBPTHREAD_LIBS@ @CURL_LIBS@
 
-dillo_SOURCES = \
-	dillo.cc \
-	version.cc \
-	version.hh \
+dplus_SOURCES = \
+	dplus.cc \
+	unicows.h \
+	unicows.c \
 	paths.cc \
 	paths.hh \
-	tipwin.cc \
-	tipwin.hh \
+	import.c \
+	import.h \
 	ui.cc \
 	ui.hh \
 	uicmd.cc \
@@ -39,16 +36,8 @@ dillo_SOURCES = \
 	bw.c \
 	cookies.c \
 	cookies.h \
-	actions.c \
-	actions.h \
-	hsts.c \
-	hsts.h \
 	auth.c \
 	auth.h \
-	md5.c \
-	md5.h \
-	digest.c \
-	digest.h \
 	colors.c \
 	colors.h \
 	binaryconst.h \
@@ -60,6 +49,8 @@ dillo_SOURCES = \
 	prefs.h \
 	prefsparser.cc \
 	prefsparser.hh \
+	prefsui.cc \
+	prefsui.hh \
 	keys.cc \
 	keys.hh \
 	msg.h \
@@ -78,6 +69,8 @@ dillo_SOURCES = \
 	timeout.hh \
 	dialog.cc \
 	dialog.hh \
+	icon.c \
+	icon.h \
 	\
 	\
 	web.cc \
@@ -92,8 +85,6 @@ dillo_SOURCES = \
 	dicache.h \
 	capi.c \
 	capi.h \
-	domain.c \
-	domain.h \
 	css.cc \
 	css.hh \
 	cssparser.cc \
@@ -104,61 +95,49 @@ dillo_SOURCES = \
 	plain.cc \
 	html.cc \
 	html.hh \
-	html_charrefs.h \
 	html_common.hh \
 	form.cc \
 	form.hh \
 	table.cc \
 	table.hh \
-	bookmark.c \
-	bookmark.h \
+	bms.h \
+	bms.c \
+	bookmark.cc \
+	bookmark.hh \
 	dns.c \
 	dns.h \
+	dns_alt.c \
 	gif.c \
 	dgif.h \
 	jpeg.c \
 	djpeg.h \
 	png.c \
 	dpng.h \
-	webp.c \
-	dwebp.h \
-	svg.c \
-	nanosvg.h \
-	nanosvgrast.h \
-	dsvg.h \
 	imgbuf.cc \
 	imgbuf.hh \
 	image.cc \
 	image.hh \
 	menu.hh \
 	menu.cc \
-	dpiapi.c \
-	dpiapi.h \
+	file.c \
+	file.h \
 	pixmaps.h \
 	findbar.cc \
 	findbar.hh \
+	download.cc \
+	download.hh \
+	print.cc \
+	print.hh \
 	xembed.cc \
 	xembed.hh
 
-# https://www.gnu.org/software/automake/manual/html_node/Built-Sources-Example.html
-nodist_dillo_SOURCES = commit.h
-version.$(OBJEXT) dillo.$(OBJEXT): commit.h
-CLEANFILES = commit.h
+if HAVE_WIN32RES
+dplus_LDADD += dplus.res
+endif
 
-if GIT_AVAILABLE
-# Rebuild commit.tmp.h every time, but only change commit.h
-# if the version is different to avoid rebuilds.
-commit.h: commit.tmp.h
-	test -f $@ || (echo "" > $@)
-	if diff $@ $^ >/dev/null; then rm $^; else mv -f $^ $@; fi
+if HAVE_WIN32RES
+dplus.res: dplus.rc dplus.ico
+	$(RC) -O coff -o $@ $<
+endif
 
-commit.tmp.h:
-	printf '#define GIT_COMMIT "%s"\n' `git --work-tree="$(top_srcdir)" describe --dirty` > $@
-else
-# No need to rebuild
-commit.h:
-	echo "" > commit.h
-endif # GIT_AVAILABLE
-
-dist_sysconf_DATA = domainrc keysrc hsts_preload
 EXTRA_DIST = chg srch

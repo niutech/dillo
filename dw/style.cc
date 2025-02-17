@@ -17,13 +17,14 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+
+
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <ctype.h>
 #include <math.h>
 
-#include "dlib/dlib.h"
 #include "core.hh"
 #include "../lout/msg.h"
 
@@ -33,53 +34,19 @@ namespace dw {
 namespace core {
 namespace style {
 
-const bool drawBackgroundLineByLine = false;
-
-const int MIN_BG_IMG_W = 10;
-const int MIN_BG_IMG_H = 10;
-const int OPT_BG_IMG_W = 50;
-const int OPT_BG_IMG_H = 50;
-
-static void calcBackgroundRelatedValues (StyleImage *backgroundImage,
-                                         BackgroundRepeat backgroundRepeat,
-                                         BackgroundAttachment
-                                         backgroundAttachment,
-                                         Length backgroundPositionX,
-                                         Length backgroundPositionY,
-                                         int xDraw, int yDraw, int widthDraw,
-                                         int heightDraw, int xRef, int yRef,
-                                         int widthRef, int heightRef,
-                                         bool *repeatX, bool *repeatY,
-                                         int *origX, int *origY,
-                                         int *tileX1, int *tileX2, int *tileY1,
-                                         int *tileY2, bool *doDraw);
-
 void StyleAttrs::initValues ()
 {
    x_link = -1;
-   x_lang[0] = x_lang[1] = 0;
    x_img = -1;
    x_tooltip = NULL;
    textDecoration = TEXT_DECORATION_NONE;
    textAlign = TEXT_ALIGN_LEFT;
    textAlignChar = '.';
-   textTransform = TEXT_TRANSFORM_NONE;
    listStylePosition = LIST_STYLE_POSITION_OUTSIDE;
    listStyleType = LIST_STYLE_TYPE_DISC;
    valign = VALIGN_BASELINE;
    backgroundColor = NULL;
-   backgroundImage = NULL;
-   backgroundRepeat = BACKGROUND_REPEAT;
-   backgroundAttachment = BACKGROUND_ATTACHMENT_SCROLL;
-   backgroundPositionX = createPerLength (0);
-   backgroundPositionY = createPerLength (0);
    width = height = lineHeight = LENGTH_AUTO;
-   minWidth = maxWidth = minHeight = maxHeight = LENGTH_AUTO;
-   vloat = FLOAT_NONE;
-   clear = CLEAR_NONE;
-   overflow = OVERFLOW_VISIBLE;
-   position = POSITION_STATIC;
-   top = bottom = left = right = LENGTH_AUTO;
    textIndent = 0;
    margin.setVal (0);
    borderWidth.setVal (0);
@@ -94,7 +61,6 @@ void StyleAttrs::initValues ()
    display = DISPLAY_INLINE;
    whiteSpace = WHITE_SPACE_NORMAL;
    cursor = CURSOR_DEFAULT;
-   zIndex = Z_INDEX_AUTO;
 }
 
 /**
@@ -107,21 +73,9 @@ void StyleAttrs::resetValues ()
 
    valign = VALIGN_BASELINE;
    textAlignChar = '.';
-   vloat = FLOAT_NONE; /** \todo Correct? Check specification. */
-   clear = CLEAR_NONE; /** \todo Correct? Check specification. */
-   overflow = OVERFLOW_VISIBLE;
-   position = POSITION_STATIC; /** \todo Correct? Check specification. */
-   top = bottom = left = right = LENGTH_AUTO; /** \todo Correct? Check
-                                                  specification. */
    backgroundColor = NULL;
-   backgroundImage = NULL;
-   backgroundRepeat = BACKGROUND_REPEAT;
-   backgroundAttachment = BACKGROUND_ATTACHMENT_SCROLL;
-   backgroundPositionX = createPerLength (0);
-   backgroundPositionY = createPerLength (0);
    width = LENGTH_AUTO;
    height = LENGTH_AUTO;
-   minWidth = maxWidth = minHeight = maxHeight = LENGTH_AUTO;
 
    margin.setVal (0);
    borderWidth.setVal (0);
@@ -160,32 +114,14 @@ bool StyleAttrs::equals (object::Object *other) {
        textDecoration == otherAttrs->textDecoration &&
        color == otherAttrs->color &&
        backgroundColor == otherAttrs->backgroundColor &&
-       backgroundImage == otherAttrs->backgroundImage &&
-       backgroundRepeat == otherAttrs->backgroundRepeat &&
-       backgroundAttachment == otherAttrs->backgroundAttachment &&
-       backgroundPositionX == otherAttrs->backgroundPositionX &&
-       backgroundPositionY == otherAttrs->backgroundPositionY &&
        textAlign == otherAttrs->textAlign &&
        valign == otherAttrs->valign &&
        textAlignChar == otherAttrs->textAlignChar &&
-       textTransform == otherAttrs->textTransform &&
-       vloat == otherAttrs->vloat &&
-       clear == otherAttrs->clear &&
-       overflow == otherAttrs->overflow &&
-       position == otherAttrs->position &&
-       top == otherAttrs->top &&
-       bottom == otherAttrs->bottom &&
-       left == otherAttrs->left &&
-       right == otherAttrs->right &&
        hBorderSpacing == otherAttrs->hBorderSpacing &&
        vBorderSpacing == otherAttrs->vBorderSpacing &&
        wordSpacing == otherAttrs->wordSpacing &&
        width == otherAttrs->width &&
        height == otherAttrs->height &&
-       minWidth == otherAttrs->minWidth &&
-       maxWidth == otherAttrs->maxWidth &&
-       minHeight == otherAttrs->minHeight &&
-       maxHeight == otherAttrs->maxHeight &&
        lineHeight == otherAttrs->lineHeight &&
        textIndent == otherAttrs->textIndent &&
        margin.equals (&otherAttrs->margin) &&
@@ -205,10 +141,7 @@ bool StyleAttrs::equals (object::Object *other) {
        listStylePosition == otherAttrs->listStylePosition &&
        listStyleType == otherAttrs->listStyleType &&
        cursor == otherAttrs->cursor &&
-       zIndex == otherAttrs->zIndex &&
        x_link == otherAttrs->x_link &&
-       x_lang[0] == otherAttrs->x_lang[0] &&
-       x_lang[1] == otherAttrs->x_lang[1] &&
        x_img == otherAttrs->x_img &&
        x_tooltip == otherAttrs->x_tooltip);
 }
@@ -218,32 +151,14 @@ int StyleAttrs::hashValue () {
       textDecoration +
       (intptr_t) color +
       (intptr_t) backgroundColor +
-      (intptr_t) backgroundImage +
-      backgroundRepeat +
-      backgroundAttachment +
-      backgroundPositionX +
-      backgroundPositionY +
       textAlign +
       valign +
       textAlignChar +
-      textTransform +
-      vloat +
-      clear +
-      overflow +
-      position +
-      top +
-      bottom +
-      left +
-      right +
       hBorderSpacing +
       vBorderSpacing +
       wordSpacing +
       width +
       height +
-      minWidth +
-      maxWidth +
-      minHeight +
-      maxHeight +
       lineHeight +
       textIndent +
       margin.hashValue () +
@@ -252,8 +167,8 @@ int StyleAttrs::hashValue () {
       borderCollapse +
       (intptr_t) borderColor.top +
       (intptr_t) borderColor.right +
-      (intptr_t) borderColor.bottom +
-      (intptr_t) borderColor.left +
+      (intptr_t) borderColor.bottom  +
+      (intptr_t) borderColor.left  +
       borderStyle.top +
       borderStyle.right +
       borderStyle.bottom +
@@ -263,9 +178,7 @@ int StyleAttrs::hashValue () {
       listStylePosition +
       listStyleType +
       cursor +
-      zIndex +
       x_link +
-      x_lang[0] + x_lang[1] +
       x_img +
       (intptr_t) x_tooltip;
 }
@@ -276,19 +189,7 @@ container::typed::HashTable <StyleAttrs, Style> * Style::styleTable =
 
 Style::Style (StyleAttrs *attrs)
 {
-   DBG_OBJ_CREATE ("dw::core::style::Style");
-
    copyAttrs (attrs);
-
-   DBG_OBJ_ASSOC_CHILD (font);
-   DBG_OBJ_ASSOC_CHILD (color);
-   DBG_OBJ_ASSOC_CHILD (backgroundColor);
-   DBG_OBJ_ASSOC_CHILD (backgroundImage);
-   DBG_OBJ_ASSOC_CHILD (borderColor.top);
-   DBG_OBJ_ASSOC_CHILD (borderColor.bottom);
-   DBG_OBJ_ASSOC_CHILD (borderColor.left);
-   DBG_OBJ_ASSOC_CHILD (borderColor.right);
-   //DBG_OBJ_ASSOC_CHILD (x_tooltip);
 
    refCount = 1;
 
@@ -297,8 +198,6 @@ Style::Style (StyleAttrs *attrs)
       color->ref ();
    if (backgroundColor)
       backgroundColor->ref ();
-   if (backgroundImage)
-      backgroundImage->ref ();
    if (borderColor.top)
       borderColor.top->ref();
    if (borderColor.bottom)
@@ -321,8 +220,6 @@ Style::~Style ()
       color->unref ();
    if (backgroundColor)
       backgroundColor->unref ();
-   if (backgroundImage)
-      backgroundImage->unref ();
    if (borderColor.top)
       borderColor.top->unref();
    if (borderColor.bottom)
@@ -336,8 +233,6 @@ Style::~Style ()
 
    styleTable->remove (this);
    totalRef--;
-
-   DBG_OBJ_DELETE ();
 }
 
 void Style::copyAttrs (StyleAttrs *attrs)
@@ -346,23 +241,9 @@ void Style::copyAttrs (StyleAttrs *attrs)
    textDecoration = attrs->textDecoration;
    color = attrs->color;
    backgroundColor = attrs->backgroundColor;
-   backgroundImage = attrs->backgroundImage;
-   backgroundRepeat = attrs->backgroundRepeat;
-   backgroundAttachment = attrs->backgroundAttachment;
-   backgroundPositionX = attrs->backgroundPositionX;
-   backgroundPositionY = attrs->backgroundPositionY;
    textAlign = attrs->textAlign;
    valign = attrs->valign;
    textAlignChar = attrs->textAlignChar;
-   textTransform = attrs->textTransform;
-   vloat = attrs->vloat;
-   clear = attrs->clear;
-   overflow = attrs->overflow;
-   position = attrs->position;
-   top = attrs->top;
-   bottom = attrs->bottom;
-   left = attrs->left;
-   right = attrs->right;
    hBorderSpacing = attrs->hBorderSpacing;
    vBorderSpacing = attrs->vBorderSpacing;
    wordSpacing = attrs->wordSpacing;
@@ -370,10 +251,6 @@ void Style::copyAttrs (StyleAttrs *attrs)
    height = attrs->height;
    lineHeight = attrs->lineHeight;
    textIndent = attrs->textIndent;
-   minWidth = attrs->minWidth;
-   maxWidth = attrs->maxWidth;
-   minHeight = attrs->minHeight;
-   maxHeight = attrs->maxHeight;
    margin = attrs->margin;
    borderWidth = attrs->borderWidth;
    padding = attrs->padding;
@@ -385,10 +262,7 @@ void Style::copyAttrs (StyleAttrs *attrs)
    listStylePosition = attrs->listStylePosition;
    listStyleType = attrs->listStyleType;
    cursor = attrs->cursor;
-   zIndex = attrs->zIndex;
    x_link = attrs->x_link;
-   x_lang[0] = attrs->x_lang[0];
-   x_lang[1] = attrs->x_lang[1];
    x_img = attrs->x_img;
    x_tooltip = attrs->x_tooltip;
 }
@@ -422,12 +296,11 @@ int FontAttrs::hashValue()
 Font::~Font ()
 {
    free ((char*)name);
-   DBG_OBJ_DELETE ();
 }
 
 void Font::copyAttrs (FontAttrs *attrs)
 {
-   name = dStrdup (attrs->name);
+   name = strdup (attrs->name);
    size = attrs->size;
    weight = attrs->weight;
    style = attrs->style;
@@ -466,7 +339,6 @@ int ColorAttrs::hashValue()
 
 Color::~Color ()
 {
-   DBG_OBJ_DELETE ();
 }
 
 int Color::shadeColor (int color, int d)
@@ -540,220 +412,12 @@ Tooltip *Tooltip::create (Layout *layout, const char *text)
 
 // ----------------------------------------------------------------------
 
-void StyleImage::StyleImgRenderer::setBuffer (core::Imgbuf *buffer, bool resize)
-{
-   if (image->imgbufSrc)
-      image->imgbufSrc->unref ();
-   if (image->imgbufTiled)
-      image->imgbufTiled->unref ();
-
-   image->imgbufTiled = NULL;
-
-   image->imgbufSrc = buffer;
-   DBG_OBJ_ASSOC (image, image->imgbufSrc);
-
-   if (image->imgbufSrc) {
-      image->imgbufSrc->ref ();
-
-      // If the image is too small, drawing a background will cause
-      // many calls of View::drawImgbuf. For this reason, we create
-      // another image buffer, the "tiled" image buffer, which is
-      // larger (the "optimal" size is defined as OPT_BG_IMG_W *
-      // OPT_BG_IMG_H) and contains the "source" buffer several times.
-      //
-      // This "tiled" buffer is not used when 'background-repeat' has
-      // another value than 'repeat', for obvious reasons. Image
-      // buffers only "tiled" in one dimension (to optimize 'repeat-x'
-      // and 'repeat-y') are not supported.
-
-      if (image->imgbufSrc->getRootWidth() * image->imgbufSrc->getRootHeight()
-          < MIN_BG_IMG_W * MIN_BG_IMG_H) {
-         image->tilesX =
-            misc::max (OPT_BG_IMG_W / image->imgbufSrc->getRootWidth(), 1);
-         image->tilesY =
-            misc::max (OPT_BG_IMG_H / image->imgbufSrc->getRootHeight(), 1);
-         image->imgbufTiled =
-            image->imgbufSrc->createSimilarBuf
-               (image->tilesX * image->imgbufSrc->getRootWidth(),
-                image->tilesY * image->imgbufSrc->getRootHeight());
-
-         DBG_OBJ_ASSOC (image, image->imgbufTiled);
-      }
-   }
-}
-
-void StyleImage::StyleImgRenderer::drawRow (int row)
-{
-   if (image->imgbufTiled) {
-      // A row of data has been copied to the source buffer, here it
-      // is copied into the tiled buffer.
-
-      // Unfortunately, this code may be called *after* some other
-      // implementations of ImgRenderer::drawRow, which actually
-      // *draw* the tiled buffer, which is so not up to date
-      // (ImgRendererDist does not define an order). OTOH, these
-      // drawing implementations calle Widget::queueResize, so the
-      // actual drawing (and so access to the tiled buffer) is done
-      // later.
-
-      int w = image->imgbufSrc->getRootWidth ();
-      int h = image->imgbufSrc->getRootHeight ();
-
-      for (int x = 0; x < image->tilesX; x++)
-         for (int y = 0; y < image->tilesX; y++)
-            image->imgbufSrc->copyTo (image->imgbufTiled, x * w, y * h,
-                                      0, row, w, 1);
-   }
-}
-
-void StyleImage::StyleImgRenderer::finish ()
-{
-   // Nothing to do.
-}
-
-void StyleImage::StyleImgRenderer::fatal ()
-{
-   // Nothing to do.
-}
-
-StyleImage::StyleImage ()
-{
-   DBG_OBJ_CREATE ("dw::core::style::StyleImage");
-
-   refCount = 0;
-   imgbufSrc = NULL;
-   imgbufTiled = NULL;
-
-   imgRendererDist = new ImgRendererDist ();
-   styleImgRenderer = new StyleImgRenderer (this);
-   imgRendererDist->put (styleImgRenderer);
-}
-
-StyleImage::~StyleImage ()
-{
-   if (imgbufSrc)
-      imgbufSrc->unref ();
-   if (imgbufTiled)
-      imgbufTiled->unref ();
-
-   delete imgRendererDist;
-   delete styleImgRenderer;
-
-   DBG_OBJ_DELETE ();
-}
-
-void StyleImage::ExternalImgRenderer::setBuffer (core::Imgbuf *buffer,
-                                                 bool resize)
-{
-   // Nothing to do?
-}
-
-void StyleImage::ExternalImgRenderer::drawRow (int row)
-{
-   if (drawBackgroundLineByLine) {
-      StyleImage *backgroundImage;
-      if (readyToDraw () && (backgroundImage = getBackgroundImage ())) {
-         // All single rows are drawn.
-
-         Imgbuf *imgbuf = backgroundImage->getImgbufSrc();
-         int imgWidth = imgbuf->getRootWidth ();
-         int imgHeight = imgbuf->getRootHeight ();
-
-         int x, y, width, height;
-         getBgArea (&x, &y, &width, &height);
-
-         int xRef, yRef, widthRef, heightRef;
-         getRefArea (&xRef, &yRef, &widthRef, &heightRef);
-
-         bool repeatX, repeatY, doDraw;
-         int origX, origY, tileX1, tileX2, tileY1, tileY2;
-
-         calcBackgroundRelatedValues (backgroundImage,
-                                      getBackgroundRepeat (),
-                                      getBackgroundAttachment (),
-                                      getBackgroundPositionX (),
-                                      getBackgroundPositionY (),
-                                      x, y, width, height, xRef, yRef, widthRef,
-                                      heightRef, &repeatX, &repeatY, &origX,
-                                      &origY, &tileX1, &tileX2, &tileY1,
-                                      &tileY2, &doDraw);
-
-         //printf ("tileX1 = %d, tileX2 = %d, tileY1 = %d, tileY2 = %d\n",
-         //        tileX1, tileX2, tileY1, tileY2);
-
-         if (doDraw)
-            // Only iterate over y, because the rows can be combined
-            // horizontally.
-            for (int tileY = tileY1; tileY <= tileY2; tileY++) {
-               int x1 = misc::max (origX + tileX1 * imgWidth, x);
-               int x2 = misc::min (origX + (tileX2 + 1) * imgWidth, x + width);
-
-               int yt = origY + tileY * imgHeight + row;
-               if (yt >= y && yt < y + height)
-                  draw (x1, yt, x2 - x1, 1);
-            }
-      }
-   }
-}
-
-void StyleImage::ExternalImgRenderer::finish ()
-{
-   if (!drawBackgroundLineByLine) {
-      if (readyToDraw ()) {
-         // Draw total area, as a whole.
-         int x, y, width, height;
-         getBgArea (&x, &y, &width, &height);
-         draw (x, y, width, height);
-      }
-   }
-}
-
-void StyleImage::ExternalImgRenderer::fatal ()
-{
-   // Nothing to do.
-}
-
-// ----------------------------------------------------------------------
-
-StyleImage *StyleImage::ExternalWidgetImgRenderer::getBackgroundImage ()
-{
-   Style *style = getStyle ();
-   return style ? style->backgroundImage : NULL;
-}
-
-BackgroundRepeat StyleImage::ExternalWidgetImgRenderer::getBackgroundRepeat ()
-{
-   Style *style = getStyle ();
-   return style ? style->backgroundRepeat : BACKGROUND_REPEAT;
-}
-
-BackgroundAttachment
-   StyleImage::ExternalWidgetImgRenderer::getBackgroundAttachment ()
-{
-   Style *style = getStyle ();
-   return style ? style->backgroundAttachment : BACKGROUND_ATTACHMENT_SCROLL;
-}
-
-Length StyleImage::ExternalWidgetImgRenderer::getBackgroundPositionX ()
-{
-   Style *style = getStyle ();
-   return style ? style->backgroundPositionX : createPerLength (0);
-}
-
-Length StyleImage::ExternalWidgetImgRenderer::getBackgroundPositionY ()
-{
-   Style *style = getStyle ();
-   return style ? style->backgroundPositionY : createPerLength (0);
-}
-
-// ----------------------------------------------------------------------
-
 /*
  * The drawBorder{Top,Bottom,Left,Right} functions are similar. They
  * use a trapezium as draw polygon, or drawTypedLine() for dots and dashes.
  * Although the concept is simple, achieving pixel accuracy is laborious [1].
  *
- * [1] https://dillo-browser.github.io/old/css_compat/tests/border-style.html
+ * [1] http://www.dillo.org/css_compat/tests/border-style.html
  */
 static void drawBorderTop(View *view, Style *style,
                           int x1, int y1, int x2, int y2)
@@ -774,7 +438,6 @@ static void drawBorderTop(View *view, Style *style,
       break;
    case BORDER_DOTTED:
       dotted = true;
-      /* fallthrough */
    case BORDER_DASHED:
       w = style->borderWidth.top;
       view->drawTypedLine(style->borderColor.top, shading,
@@ -784,7 +447,6 @@ static void drawBorderTop(View *view, Style *style,
    case BORDER_SOLID:
    case BORDER_INSET:
       inset = true;
-      /* fallthrough */
    case BORDER_OUTSET:
       if (style->borderStyle.top != BORDER_SOLID)
          shading = (inset) ? Color::SHADING_DARK : Color::SHADING_LIGHT;
@@ -804,7 +466,6 @@ static void drawBorderTop(View *view, Style *style,
       break;
    case BORDER_RIDGE:
       ridge = true;
-      /* fallthrough */
    case BORDER_GROOVE:
       d = style->borderWidth.top & 1;
       points[0].x = x1;
@@ -874,7 +535,6 @@ static void drawBorderBottom(View *view, Style *style,
       break;
    case BORDER_DOTTED:
       dotted = true;
-      /* fallthrough */
    case BORDER_DASHED:
       w = style->borderWidth.bottom;
       view->drawTypedLine(style->borderColor.bottom, shading,
@@ -884,7 +544,6 @@ static void drawBorderBottom(View *view, Style *style,
    case BORDER_SOLID:
    case BORDER_INSET:
       inset = true;
-      /* fallthrough */
    case BORDER_OUTSET:
       if (style->borderStyle.bottom != BORDER_SOLID)
          shading = (inset) ? Color::SHADING_LIGHT : Color::SHADING_DARK;
@@ -904,7 +563,6 @@ static void drawBorderBottom(View *view, Style *style,
       break;
    case BORDER_RIDGE:
       ridge = true;
-      /* fallthrough */
    case BORDER_GROOVE:
       w = style->borderWidth.bottom;
       d = w & 1;
@@ -976,7 +634,6 @@ static void drawBorderLeft(View *view, Style *style,
       break;
    case BORDER_DOTTED:
       dotted = true;
-      /* fallthrough */
    case BORDER_DASHED:
       w = style->borderWidth.left;
       view->drawTypedLine(style->borderColor.left, shading,
@@ -986,7 +643,6 @@ static void drawBorderLeft(View *view, Style *style,
    case BORDER_SOLID:
    case BORDER_INSET:
       inset = true;
-      /* fallthrough */
    case BORDER_OUTSET:
       if (style->borderStyle.left != BORDER_SOLID)
          shading = (inset) ? Color::SHADING_DARK : Color::SHADING_LIGHT;
@@ -1005,7 +661,6 @@ static void drawBorderLeft(View *view, Style *style,
       break;
    case BORDER_RIDGE:
       ridge = true;
-      /* fallthrough */
    case BORDER_GROOVE:
       w = style->borderWidth.left;
       d = w & 1;
@@ -1076,7 +731,6 @@ static void drawBorderRight(View *view, Style *style,
       break;
    case BORDER_DOTTED:
       dotted = true;
-      /* fallthrough */
    case BORDER_DASHED:
       w = style->borderWidth.right;
       view->drawTypedLine(style->borderColor.right, shading,
@@ -1086,7 +740,6 @@ static void drawBorderRight(View *view, Style *style,
    case BORDER_SOLID:
    case BORDER_INSET:
       inset = true;
-      /* fallthrough */
    case BORDER_OUTSET:
       if (style->borderStyle.right != BORDER_SOLID)
          shading = (inset) ? Color::SHADING_LIGHT : Color::SHADING_DARK;
@@ -1105,7 +758,6 @@ static void drawBorderRight(View *view, Style *style,
       break;
    case BORDER_RIDGE:
       ridge = true;
-      /* fallthrough */
    case BORDER_GROOVE:
       w = style->borderWidth.right;
       d = w & 1;
@@ -1161,11 +813,8 @@ static void drawBorderRight(View *view, Style *style,
  * \brief Draw the border of a region in window, according to style.
  *
  * Used by dw::core::Widget::drawBox and dw::core::Widget::drawWidgetBox.
- *
- * "area" is the area to be drawn, "x", "y", "width" and "height"
- * define the box itself. All are given in canvas coordinates.
  */
-void drawBorder (View *view, Layout *layout, Rectangle *area,
+void drawBorder (View *view, Rectangle *area,
                  int x, int y, int width, int height,
                  Style *style, bool inverse)
 {
@@ -1202,201 +851,29 @@ void drawBorder (View *view, Layout *layout, Rectangle *area,
  *    according to style.
  *
  * Used by dw::core::Widget::drawBox and dw::core::Widget::drawWidgetBox.
- *
- * "area" is the area to be drawn, "x", "y", "width" and "height"
- * define the box itself (padding box). "xRef", "yRef", "widthRef" and
- * "heightRef" define the reference area, which is important for the
- * tiling of background images (for position 0%/0%, a tile is set at
- * xRef/yRef; for position 100%/100%, a tile is set at xRef +
- * widthRef/yRef + widthRef). See calls for more information; in most
- * cases, these boxes are identical (padding box). All these
- * coordinates are given in canvas coordinates.
- *
- * "atTop" should be true, only if the area is drawn directly on the
- * canvas, not on top of other areas; this is only true for the
- * toplevel widget itself (not parts of its contents). Toplevel widget
- * background colors are already set as viewport background color, so
- * that drawing again is is not necessary, but some time can be
- * saved.
- *
- * Otherwise, the caller should not try to increase the performance by
- * doing some tests before; this is all done in this method.
- * 
- * "bgColor" is passes implicitly. For non-inversed drawing,
- * style->backgroundColor may simply used. However, when drawing is
- * inversed, and style->backgroundColor is undefined (NULL), a
- * background color defined higher in the hierarchy (which is not
- * accessible here) must be used.
- *
- * (Background *images* are never drawn inverse.)
  */
-void drawBackground (View *view, Layout *layout, Rectangle *area,
+void drawBackground (View *view, Rectangle *area,
                      int x, int y, int width, int height,
-                     int xRef, int yRef, int widthRef, int heightRef,
-                     Style *style, Color *bgColor, bool inverse, bool atTop)
+                     Style *style, bool inverse)
 {
-   bool hasBgColor = bgColor != NULL &&
-      // The test for background colors is rather simple, since only the color
-      // has to be compared, ...
-      (!atTop || layout->getBgColor () != bgColor);
-   bool hasBgImage = (style->backgroundImage != NULL &&
-                      style->backgroundImage->getImgbufSrc() != NULL) &&
-      // ... but for backgrounds, it would be rather complicated. To handle the
-      // two cases (normal HTML in a viewport, where the layout background
-      // image is set, and contents of <button> within a flat view, where the
-      // background image of the toplevel widget is set), only the background
-      // images are compared. A full test, which also deals with all other
-      // attributes related to background images (repeat, position etc.) would
-      // be complicated and useless, so not worth the work.
-      (!atTop || layout->getBgImage () != style->backgroundImage);
+   Rectangle bgArea, intersection;
 
-   // Since widgets are always drawn from top to bottom, it is *not*
-   // necessary to draw the background if background color and image
-   // are not set (NULL), i. e. shining through.
+   if (style->backgroundColor) {
+      bgArea.x = x + style->margin.left + style->borderWidth.left;
+      bgArea.y = y + style->margin.top + style->borderWidth.top;
+      bgArea.width =
+         width - style->margin.left - style->borderWidth.left -
+         style->margin.right - style->borderWidth.right;
+      bgArea.height =
+         height - style->margin.top - style->borderWidth.top -
+         style->margin.bottom - style->borderWidth.bottom;
 
-   if (hasBgColor || hasBgImage) {
-      Rectangle bgArea, intersection;
-      bgArea.x = x;
-      bgArea.y = y;
-      bgArea.width = width;
-      bgArea.height = height;
-
-      if (area->intersectsWith (&bgArea, &intersection)) {
-         if (hasBgColor)
-            view->drawRectangle (bgColor,
-                                 inverse ?
-                                 Color::SHADING_INVERSE : Color::SHADING_NORMAL,
-                                 true, intersection.x, intersection.y,
-                                 intersection.width, intersection.height);
-
-         if (hasBgImage)
-            drawBackgroundImage (view, style->backgroundImage,
-                                 style->backgroundRepeat,
-                                 style->backgroundAttachment,
-                                 style->backgroundPositionX,
-                                 style->backgroundPositionY,
-                                 intersection.x, intersection.y,
-                                 intersection.width, intersection.height,
-                                 xRef, yRef, widthRef, heightRef);
-
-      }
-   }
-}
-
-void drawBackgroundImage (View *view, StyleImage *backgroundImage,
-                          BackgroundRepeat backgroundRepeat,
-                          BackgroundAttachment backgroundAttachment,
-                          Length backgroundPositionX,
-                          Length backgroundPositionY,
-                          int x, int y, int width, int height,
-                          int xRef, int yRef, int widthRef, int heightRef)
-{
-   //printf ("drawBackgroundImage (..., [img: %d, %d], ..., (%d, %d), %d x %d, "
-   //        "(%d, %d), %d x %d)\n", imgWidth, imgHeight, x, y, width, height,
-   //        xRef, yRef, widthRef, heightRef);
-
-   bool repeatX, repeatY, doDraw;
-   int origX, origY, tileX1, tileX2, tileY1, tileY2;
-
-   calcBackgroundRelatedValues (backgroundImage, backgroundRepeat,
-                                backgroundAttachment, backgroundPositionX,
-                                backgroundPositionY, x, y, width, height,
-                                xRef, yRef, widthRef, heightRef,
-                                &repeatX, &repeatY, &origX, &origY,
-                                &tileX1, &tileX2, &tileY1, &tileY2, &doDraw);
-
-   //printf ("tileX1 = %d, tileX2 = %d, tileY1 = %d, tileY2 = %d\n",
-   //        tileX1, tileX2, tileY1, tileY2);
-
-   if (doDraw) {
-      // Drawing is done with the "tiled" buffer, but all calculations
-      // before have been done with the "source" buffer.
-
-      Imgbuf *imgbufS = backgroundImage->getImgbufSrc();
-      int imgWidthS = imgbufS->getRootWidth ();
-      int imgHeightS = imgbufS->getRootHeight ();
-
-      Imgbuf *imgbufT = backgroundImage->getImgbufTiled(repeatX, repeatY);
-      int imgWidthT = imgbufT->getRootWidth ();
-      int imgHeightT = imgbufT->getRootHeight ();
-      int tilesX = backgroundImage->getTilesX (repeatX, repeatY);
-      int tilesY = backgroundImage->getTilesY (repeatX, repeatY);
-
-      for (int tileX = tileX1; tileX <= tileX2; tileX += tilesX)
-         for (int tileY = tileY1; tileY <= tileY2; tileY += tilesY) {
-            int xt = origX + tileX * imgWidthS;
-            int x1 = misc::max (xt, x);
-            int x2 = misc::min (xt + imgWidthT, x + width);
-            int yt = origY + tileY * imgHeightS;
-            int y1 = misc::max (yt, y);
-            int y2 = misc::min (yt + imgHeightT, y + height);
-
-            view->drawImage (imgbufT, xt, yt, x1 - xt, y1 - yt,
-                             x2 - x1, y2 - y1);
-         }
-   }
-}
-
-void calcBackgroundRelatedValues (StyleImage *backgroundImage,
-                                  BackgroundRepeat backgroundRepeat,
-                                  BackgroundAttachment backgroundAttachment,
-                                  Length backgroundPositionX,
-                                  Length backgroundPositionY,
-                                  int xDraw, int yDraw, int widthDraw,
-                                  int heightDraw, int xRef, int yRef,
-                                  int widthRef, int heightRef, bool *repeatX,
-                                  bool *repeatY, int *origX, int *origY,
-                                  int *tileX1, int *tileX2, int *tileY1,
-                                  int *tileY2, bool *doDraw)
-{
-   Imgbuf *imgbuf = backgroundImage->getImgbufSrc();
-   int imgWidth = imgbuf->getRootWidth ();
-   int imgHeight = imgbuf->getRootHeight ();
-
-   *repeatX = backgroundRepeat == BACKGROUND_REPEAT ||
-      backgroundRepeat == BACKGROUND_REPEAT_X;
-   *repeatY = backgroundRepeat == BACKGROUND_REPEAT ||
-      backgroundRepeat == BACKGROUND_REPEAT_Y;
-
-   *origX = xRef +
-      (isPerLength (backgroundPositionX) ?
-       multiplyWithPerLength (widthRef - imgWidth, backgroundPositionX) :
-       absLengthVal (backgroundPositionX));
-   *origY = yRef +
-      (isPerLength (backgroundPositionY) ?
-       multiplyWithPerLength (heightRef - imgHeight, backgroundPositionY) :
-       absLengthVal (backgroundPositionY));
-
-   *tileX1 = xDraw < *origX ?
-      - (*origX - xDraw + imgWidth - 1) / imgWidth :
-      (xDraw - *origX) / imgWidth;
-   *tileX2 = *origX < xDraw + widthDraw ?
-      (xDraw + widthDraw - *origX - 1) / imgWidth :
-      - (*origX - (xDraw + widthDraw) + imgWidth - 1) / imgWidth;
-   *tileY1 = yDraw < *origY ?
-      - (*origY - yDraw + imgHeight - 1) / imgHeight :
-      (yDraw - *origY) / imgHeight;
-   *tileY2 = *origY < yDraw + heightDraw ?
-      (yDraw + heightDraw - *origY - 1) / imgHeight :
-      - (*origY - (yDraw + heightDraw) + imgHeight - 1) / imgHeight;
-
-   *doDraw = true;
-   if (!*repeatX) {
-      // Only center tile (tileX = 0) is drawn, ...
-      if (*tileX1 <= 0 && *tileX2 >= 0)
-         // ... and is visible.
-         *tileX1 = *tileX2 = 0;
-      else
-         // ... but is not visible.
-         *doDraw = false;
-   }
-
-   if (!*repeatY) {
-      // Analogue.
-      if (*tileY1 <= 0 && *tileY2 >= 0)
-         *tileY1 = *tileY2 = 0;
-      else
-         *doDraw = false;
+      if (area->intersectsWith (&bgArea, &intersection))
+         view->drawRectangle (style->backgroundColor,
+                              inverse ?
+                              Color::SHADING_INVERSE : Color::SHADING_NORMAL,
+                              true, intersection.x, intersection.y,
+                              intersection.width, intersection.height);
    }
 }
 
@@ -1408,10 +885,10 @@ static const char
    *const roman_I2[] = { "","C","CC","CCC","CD","D","DC","DCC","DCCC","CM" },
    *const roman_I3[] = { "","M","MM","MMM","MMMM" };
 
-static void strAsciiTolower (char *s)
+static void strtolower (char *s)
 {
    for ( ; *s; s++)
-      *s = misc::AsciiTolower (*s);
+      *s = tolower (*s);
 }
 
 /**
@@ -1432,7 +909,6 @@ void numtostr (int num, char *buf, int buflen, ListStyleType listStyleType)
    case LIST_STYLE_TYPE_LOWER_ALPHA:
    case LIST_STYLE_TYPE_LOWER_LATIN:
       start_ch = 'a';
-      /* fallthrough */
    case LIST_STYLE_TYPE_UPPER_ALPHA:
    case LIST_STYLE_TYPE_UPPER_LATIN:
       i0 = num - 1;
@@ -1447,7 +923,6 @@ void numtostr (int num, char *buf, int buflen, ListStyleType listStyleType)
       break;
    case LIST_STYLE_TYPE_LOWER_ROMAN:
       low = true;
-      /* fallthrough */
    case LIST_STYLE_TYPE_UPPER_ROMAN:
       i0 = num;
       i1 = i0/10; i2 = i1/10; i3 = i2/10;
@@ -1468,10 +943,10 @@ void numtostr (int num, char *buf, int buflen, ListStyleType listStyleType)
    buf[buflen - 1] = '\0';
 
    if (low)
-      strAsciiTolower(buf);
+      strtolower(buf);
 
 }
 
 } // namespace style
-} // namespace core
 } // namespace dw
+} // namespace core

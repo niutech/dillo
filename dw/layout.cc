@@ -2,7 +2,6 @@
  * Dillo Widget
  *
  * Copyright 2005-2007 Sebastian Geerken <sgeerken@dillo.org>
- * Copyright 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +21,6 @@
 
 #include "core.hh"
 
-#include "dlib/dlib.h"
 #include "../lout/msg.h"
 #include "../lout/debug.hh"
 #include "../lout/misc.hh"
@@ -33,69 +31,6 @@ using namespace lout::object;
 
 namespace dw {
 namespace core {
-
-bool Layout::LayoutImgRenderer::readyToDraw ()
-{
-   return true;
-}
-
-void Layout::LayoutImgRenderer::getBgArea (int *x, int *y, int *width,
-                                           int *height)
-{
-   // TODO Actually not padding area, but visible area?
-   getRefArea (x, y, width, height);
-}
-
-void Layout::LayoutImgRenderer::getRefArea (int *xRef, int *yRef, int *widthRef,
-                                            int *heightRef)
-{
-   *xRef = 0;
-   *yRef = 0;
-   *widthRef = misc::max (layout->viewportWidth
-                          - (layout->canvasHeightGreater ?
-                             layout->vScrollbarThickness : 0),
-                          layout->canvasWidth);
-   *heightRef = misc::max (layout->viewportHeight
-                           - layout->hScrollbarThickness,
-                           layout->canvasAscent + layout->canvasDescent);
-}
-
-style::StyleImage *Layout::LayoutImgRenderer::getBackgroundImage ()
-{
-   return layout->bgImage;
-}
-
-style::BackgroundRepeat Layout::LayoutImgRenderer::getBackgroundRepeat ()
-{
-   return layout->bgRepeat;
-}
-
-style::BackgroundAttachment
-   Layout::LayoutImgRenderer::getBackgroundAttachment ()
-{
-   return layout->bgAttachment;
-}
-
-style::Length Layout::LayoutImgRenderer::getBackgroundPositionX ()
-{
-   return layout->bgPositionX;
-}
-
-style::Length Layout::LayoutImgRenderer::getBackgroundPositionY ()
-{
-   return layout->bgPositionY;
-}
-
-void Layout::LayoutImgRenderer::draw (int x, int y, int width, int height)
-{
-   layout->queueDraw (x, y, width, height);
-}
-
-// ----------------------------------------------------------------------
-
-void Layout::Receiver::resizeQueued (bool extremesChanged)
-{
-}
 
 void Layout::Receiver::canvasSizeChanged (int width, int ascent, int descent)
 {
@@ -116,22 +51,11 @@ bool Layout::Emitter::emitToReceiver (lout::signal::Receiver *receiver,
                                          ((Integer*)argv[2])->getValue ());
       break;
 
-   case RESIZE_QUEUED:
-      layoutReceiver->resizeQueued (((Boolean*)argv[0])->getValue ());
-      break;
-
    default:
       misc::assertNotReached ();
    }
 
    return false;
-}
-
-void Layout::Emitter::emitResizeQueued (bool extremesChanged)
-{
-   Boolean ec (extremesChanged);
-   Object *argv[1] = { &ec };
-   emitVoid (RESIZE_QUEUED, 1, argv);
 }
 
 void Layout::Emitter::emitCanvasSizeChanged (int width,
@@ -255,19 +179,16 @@ Layout::Anchor::~Anchor ()
 
 // ---------------------------------------------------------------------
 
-Layout::Layout (Platform *platform, bool limit)
+Layout::Layout (Platform *platform)
 {
    this->platform = platform;
    view = NULL;
    topLevel = NULL;
    widgetAtPoint = NULL;
 
-   queueResizeList = new typed::Vector<Widget> (4, false);
-
-   DBG_OBJ_CREATE ("dw::core::Layout");
+   DBG_OBJ_CREATE (this, "DwRenderLayout");
 
    bgColor = NULL;
-   bgImage = NULL;
    cursor = style::CURSOR_DEFAULT;
 
    canvasWidth = canvasAscent = canvasDescent = 0;
@@ -277,11 +198,6 @@ Layout::Layout (Platform *platform, bool limit)
    scrollX = scrollY = 0;
    viewportWidth = viewportHeight = 0;
    hScrollbarThickness = vScrollbarThickness = 0;
-
-   DBG_OBJ_SET_NUM ("viewportWidth", viewportWidth);
-   DBG_OBJ_SET_NUM ("viewportHeight", viewportHeight);
-   DBG_OBJ_SET_NUM ("hScrollbarThickness", hScrollbarThickness);
-   DBG_OBJ_SET_NUM ("vScrollbarThickness", vScrollbarThickness);
 
    requestedAnchor = NULL;
    scrollIdleId = -1;
@@ -294,32 +210,17 @@ Layout::Layout (Platform *platform, bool limit)
 
    textZone = new misc::ZoneAllocator (16 * 1024);
 
-   DBG_OBJ_ASSOC_CHILD (&findtextState);
-   DBG_OBJ_ASSOC_CHILD (&selectionState);
+   DBG_OBJ_ASSOC (&findtextState, this);
+   DBG_OBJ_ASSOC (&selectionState, this);
 
    platform->setLayout (this);
 
    selectionState.setLayout(this);
-
-   queueResizeCounter = sizeAllocateCounter = sizeRequestCounter =
-      getExtremesCounter = 0;
-
-   layoutImgRenderer = NULL;
-
-   resizeIdleCounter = queueResizeCounter = sizeAllocateCounter
-      = sizeRequestCounter = getExtremesCounter = resizeCounter = 0;
-   resizeLimit = limit;
 }
 
 Layout::~Layout ()
 {
    widgetAtPoint = NULL;
-
-   if (layoutImgRenderer) {
-      if (bgImage)
-         bgImage->removeExternalImgRenderer (layoutImgRenderer);
-      delete layoutImgRenderer;
-   }
 
    if (scrollIdleId != -1)
       platform->removeIdle (scrollIdleId);
@@ -327,45 +228,15 @@ Layout::~Layout ()
       platform->removeIdle (resizeIdleId);
    if (bgColor)
       bgColor->unref ();
-   if (bgImage)
-      bgImage->unref ();
    if (topLevel) {
-      detachWidget (topLevel);
       Widget *w = topLevel;
       topLevel = NULL;
       delete w;
    }
-
-   delete queueResizeList;
    delete platform;
    delete view;
    delete anchorsTable;
    delete textZone;
-
-   if (requestedAnchor)
-      free (requestedAnchor);
-
-   DBG_OBJ_DELETE ();
-}
-
-void Layout::detachWidget (Widget *widget)
-{
-   // Called form ~Layout. Sometimes, the widgets (not only the toplevel widget)
-   // do some stuff after the layout has been deleted, so *all* widgets have to
-   // be detached, and check "layout != NULL" at relevant points.
-
-   // Could be replaced by a virtual method in Widget, like getWidgetAtPoint,
-   // if performance were really a problem.
-
-   widget->layout = NULL;
-   Iterator *it =
-      widget->iterator ((Content::Type)
-                        (Content::WIDGET_IN_FLOW | Content::WIDGET_OOF_CONT),
-                        false);
-   while (it->next ())
-      detachWidget (it->getContent()->widget);
-
-   it->unref ();
 }
 
 void Layout::addWidget (Widget *widget)
@@ -375,32 +246,14 @@ void Layout::addWidget (Widget *widget)
       return;
    }
 
-   // The toplevel widget always establishes a stacking context. It could
-   // already be set in Widget::setStyle().
-   if (widget->stackingContextMgr == NULL && IMPL_POS) {
-      widget->stackingContextMgr = new StackingContextMgr (widget);
-      DBG_OBJ_ASSOC (widget, widget->stackingContextMgr);
-      widget->stackingContextWidget = widget;
-   }
-
    topLevel = widget;
    widget->layout = this;
-   widget->container = NULL;
-   DBG_OBJ_SET_PTR_O (widget, "container", widget->container);
-
-   queueResizeList->clear ();
-   widget->notifySetAsTopLevel ();
 
    findtextState.setWidget (widget);
 
    canvasHeightGreater = false;
-   DBG_OBJ_SET_SYM ("canvasHeightGreater",
-                    canvasHeightGreater ? "true" : "false");
-
-   // Do not directly call Layout::queueResize(), but
-   // Widget::queueResize(), so that all flags are set properly,
-   // queueResizeList is filled, etc.
-   topLevel->queueResize (-1, false);
+   setSizeHints ();
+   queueResize ();
 }
 
 void Layout::removeWidget ()
@@ -409,7 +262,6 @@ void Layout::removeWidget ()
     * \bug Some more attributes must be reset here.
     */
    topLevel = NULL;
-   queueResizeList->clear ();
    widgetAtPoint = NULL;
    canvasWidth = canvasAscent = canvasDescent = 0;
    scrollX = scrollY = 0;
@@ -432,8 +284,6 @@ void Layout::removeWidget ()
 
 void Layout::setWidget (Widget *widget)
 {
-   DBG_OBJ_ASSOC_CHILD (widget);
-
    widgetAtPoint = NULL;
    if (topLevel) {
       Widget *w = topLevel;
@@ -444,10 +294,6 @@ void Layout::setWidget (Widget *widget)
    addWidget (widget);
 
    updateCursor ();
-
-   /* Reset the resizeCounter when we change the top level widget, as we are
-    * changing to another page */
-   resizeCounter = 0;
 }
 
 /**
@@ -460,8 +306,6 @@ void Layout::attachView (View *view)
 {
    if (this->view)
       MSG_ERR("attachView: Multiple views for layout!\n");
-
-   DBG_OBJ_ASSOC_CHILD (view);
 
    this->view = view;
    platform->attachView (view);
@@ -493,11 +337,6 @@ void Layout::attachView (View *view)
          hScrollbarThickness = view->getHScrollbarThickness ();
          vScrollbarThickness = view->getVScrollbarThickness ();
       }
-
-      DBG_OBJ_SET_NUM ("viewportWidth", viewportWidth);
-      DBG_OBJ_SET_NUM ("viewportHeight", viewportHeight);
-      DBG_OBJ_SET_NUM ("hScrollbarThickness", hScrollbarThickness);
-      DBG_OBJ_SET_NUM ("vScrollbarThickness", vScrollbarThickness);
    }
 
    /*
@@ -510,10 +349,8 @@ void Layout::attachView (View *view)
 
 void Layout::detachView (View *view)
 {
-   if (this->view != view) {
-      MSG_ERR("detachView: this->view: %p view %p\n",
-            (void *) this->view, (void *) view);
-   }
+   if (this->view != view)
+      MSG_ERR("detachView: this->view: %p view %p\n", this->view, view);
 
    view->setLayout (NULL);
    platform->detachView (view);
@@ -577,16 +414,16 @@ void Layout::scrollIdle ()
    case HPOS_CENTER:
       scrollX =
          scrollTargetX
-         - (viewportWidth - currVScrollbarThickness() - scrollTargetWidth) / 2;
+         - (viewportWidth - vScrollbarThickness - scrollTargetWidth) / 2;
       break;
    case HPOS_RIGHT:
       scrollX =
          scrollTargetX
-         - (viewportWidth - currVScrollbarThickness() - scrollTargetWidth);
+         - (viewportWidth - vScrollbarThickness - scrollTargetWidth);
       break;
    case HPOS_INTO_VIEW:
       xChanged = calcScrollInto (scrollTargetX, scrollTargetWidth, &scrollX,
-                                 viewportWidth - currVScrollbarThickness());
+                                 viewportWidth - vScrollbarThickness);
       break;
    case HPOS_NO_CHANGE:
       xChanged = false;
@@ -601,16 +438,16 @@ void Layout::scrollIdle ()
    case VPOS_CENTER:
       scrollY =
          scrollTargetY
-         - (viewportHeight - currHScrollbarThickness() - scrollTargetHeight)/2;
+         - (viewportHeight - hScrollbarThickness - scrollTargetHeight) / 2;
       break;
    case VPOS_BOTTOM:
       scrollY =
          scrollTargetY
-         - (viewportHeight - currHScrollbarThickness() - scrollTargetHeight);
+         - (viewportHeight - hScrollbarThickness - scrollTargetHeight);
       break;
    case VPOS_INTO_VIEW:
       yChanged = calcScrollInto (scrollTargetY, scrollTargetHeight, &scrollY,
-                                 viewportHeight - currHScrollbarThickness());
+                                 viewportHeight - hScrollbarThickness);
       break;
    case VPOS_NO_CHANGE:
       yChanged = false;
@@ -669,27 +506,7 @@ bool Layout::calcScrollInto (int requestedValue, int requestedSize,
 
 void Layout::draw (View *view, Rectangle *area)
 {
-   DBG_OBJ_ENTER ("draw", 0, "draw", "%d, %d, %d * %d",
-                  area->x, area->y, area->width, area->height);
-
    Rectangle widgetArea, intersection, widgetDrawArea;
-
-   // First of all, draw background image. (Unlike background *color*,
-   // this is not a feature of the views.)
-   if (bgImage != NULL && bgImage->getImgbufSrc() != NULL)
-      style::drawBackgroundImage (view, bgImage, bgRepeat, bgAttachment,
-                                  bgPositionX, bgPositionY,
-                                  area->x, area->y, area->width,
-                                  area->height, 0, 0,
-                                  // Reference area: maximum of canvas size and
-                                  // viewport size.
-                                  misc::max (viewportWidth
-                                             - (canvasHeightGreater ?
-                                                vScrollbarThickness : 0),
-                                             canvasWidth),
-                                  misc::max (viewportHeight
-                                             - hScrollbarThickness,
-                                             canvasAscent + canvasDescent));
 
    if (scrollIdleId != -1) {
       /* scroll is pending, defer draw until after scrollIdle() */
@@ -711,25 +528,11 @@ void Layout::draw (View *view, Rectangle *area)
          widgetDrawArea.width = intersection.width;
          widgetDrawArea.height = intersection.height;
 
-         DrawingContext context (&widgetArea);
-         topLevel->draw (view, &widgetDrawArea, &context);
+         topLevel->draw (view, &widgetDrawArea);
 
          view->finishDrawing (&intersection);
       }
    }
-
-   DBG_OBJ_LEAVE ();
-}
-
-int Layout::currHScrollbarThickness()
-{
-   return (canvasWidth > viewportWidth) ? hScrollbarThickness : 0;
-}
-
-int Layout::currVScrollbarThickness()
-{
-   return (canvasAscent + canvasDescent > viewportHeight) ?
-          vScrollbarThickness : 0;
 }
 
 /**
@@ -740,8 +543,8 @@ void Layout::setAnchor (const char *anchor)
    _MSG("setAnchor (%s)\n", anchor);
 
    if (requestedAnchor)
-      free (requestedAnchor);
-   requestedAnchor = anchor ? dStrdup (anchor) : NULL;
+      free(requestedAnchor);
+   requestedAnchor = anchor ? strdup (anchor) : NULL;
    updateAnchor ();
 }
 
@@ -760,7 +563,7 @@ char *Layout::addAnchor (Widget *widget, const char* name, int y)
       return NULL;
    else {
       Anchor *anchor = new Anchor ();
-      anchor->name = dStrdup (name);
+      anchor->name = strdup (name);
       anchor->widget = widget;
       anchor->y = y;
 
@@ -836,116 +639,23 @@ void Layout::setBgColor (style::Color *color)
       view->setBgColor (bgColor);
 }
 
-void Layout::setBgImage (style::StyleImage *bgImage,
-                         style::BackgroundRepeat bgRepeat,
-                         style::BackgroundAttachment bgAttachment,
-                         style::Length bgPositionX, style::Length bgPositionY)
-{
-   if (layoutImgRenderer && this->bgImage)
-      this->bgImage->removeExternalImgRenderer (layoutImgRenderer);
-
-   if (bgImage)
-      bgImage->ref ();
-
-   if (this->bgImage)
-      this->bgImage->unref ();
-
-   this->bgImage = bgImage;
-   this->bgRepeat = bgRepeat;
-   this->bgAttachment = bgAttachment;
-   this->bgPositionX = bgPositionX;
-   this->bgPositionY = bgPositionY;
-
-   if (bgImage) {
-      // Create instance of LayoutImgRenderer when needed. Until this
-      // layout is deleted, "layoutImgRenderer" will be kept, since it
-      // is not specific to the style, but only to this layout.
-      if (layoutImgRenderer == NULL)
-         layoutImgRenderer = new LayoutImgRenderer (this);
-      bgImage->putExternalImgRenderer (layoutImgRenderer);
-   }
-}
-
-
 void Layout::resizeIdle ()
 {
-   DBG_OBJ_ENTER0 ("resize", 0, "resizeIdle");
+   //static int calls = 0;
+   //MSG(" Layout::resizeIdle calls = %d\n", ++calls);
 
-   enterResizeIdle ();
-
-   // There are two commits, 2863:b749629fbfc9 and 4645:ab70f9ce4353, the second
-   // reverting the former. Interrestingly, the second fixes a bug. However, it
-   // should still examined what happens here, and what happens the other calls
-   // to Layout::resizeIdle() which should be still in the queue. (See
-   // Layout::queueResize(), where resizeIdleId is indeed checked.)
-
-   for (int i = 0; resizeIdleId != -1; i++) {
-
-      /* Prevent infinite resize loop, if we reach this point it is very likely
-       * there is a bug in the layouting process */
-      if (resizeLimit && resizeCounter >= 1000) {
-         MSG_ERR("Emergency layout stop after %d iterations\n", resizeCounter);
-         MSG_ERR("Please file a bug report with the complete console output\n");
-         resizeIdleId = -1;
-         break;
-      }
-
-      /* Only allow 100 iterations before returning to redraw the screen. */
-      if (i >= 100) {
-         MSG_WARN("Stopping layout loop after %d iterations\n", resizeCounter);
-         break;
-      }
-
-      resizeCounter++;
-
-      for (typed::Iterator <Widget> it = queueResizeList->iterator();
-           it.hasNext (); ) {
-         Widget *widget = it.getNext ();
-
-         if (widget->resizeQueued ()) {
-            widget->setFlags (Widget::NEEDS_RESIZE);
-            widget->unsetFlags (Widget::RESIZE_QUEUED);
-         }
-
-         if (widget->allocateQueued ()) {
-            widget->setFlags (Widget::NEEDS_ALLOCATE);
-            widget->unsetFlags (Widget::ALLOCATE_QUEUED);
-         }
-
-         if (widget->extremesQueued ()) {
-            widget->setFlags (Widget::EXTREMES_CHANGED);
-            widget->unsetFlags (Widget::EXTREMES_QUEUED);
-         }
-      }
-      queueResizeList->clear ();
-
-      // Reset here, since below, queueResize() may be called again.
+   while (resizeIdleId != -1) {
+      // Reset already here, since in this function, queueResize() may be
+      // called again.
       resizeIdleId = -1;
 
-      // If this method is triggered by a viewport change, we can save
-      // time when the toplevel widget is not affected (as for a toplevel
-      // image resource).
-      if (topLevel &&
-          (topLevel->needsResize () || topLevel->needsAllocate ())) {
+      if (topLevel) {
          Requisition requisition;
          Allocation allocation;
 
          topLevel->sizeRequest (&requisition);
-         DBG_OBJ_MSGF ("resize", 1, "toplevel size: %d * (%d + %d)",
-                       requisition.width, requisition.ascent,
-                       requisition.descent);
-
-         // This method is triggered by Widget::queueResize, which will,
-         // in any case, set NEEDS_ALLOCATE (indirectly, as ALLOCATE_QUEUED).
-         // This assertion helps to find inconsistencies. (Cases where
-         // this method is triggered by a viewport change, but the
-         // toplevel widget is not affected, are filtered out some lines
-         // above: "if (topLevel && topLevel->needsResize ())".)
-         assert (topLevel->needsAllocate ());
 
          allocation.x = allocation.y = 0;
-         if (usesViewport && view->getScrollbarOnLeft())
-            allocation.x += currVScrollbarThickness();
          allocation.width = requisition.width;
          allocation.ascent = requisition.ascent;
          allocation.descent = requisition.descent;
@@ -954,38 +664,51 @@ void Layout::resizeIdle ()
          canvasWidth = requisition.width;
          canvasAscent = requisition.ascent;
          canvasDescent = requisition.descent;
-         emitter.emitCanvasSizeChanged (canvasWidth, 
-                                        canvasAscent, canvasDescent);
+
+         emitter.emitCanvasSizeChanged (
+            canvasWidth, canvasAscent, canvasDescent);
+
          // Tell the view about the new world size.
          view->setCanvasSize (canvasWidth, canvasAscent, canvasDescent);
+         //  view->queueDrawTotal (false);
 
          if (usesViewport) {
-            int currHThickness = currHScrollbarThickness();
-            int currVThickness = currVScrollbarThickness();
+            int actualHScrollbarThickness =
+               (canvasWidth > viewportWidth) ? hScrollbarThickness : 0;
+            int actualVScrollbarThickness =
+            (canvasAscent + canvasDescent > viewportHeight) ?
+            vScrollbarThickness : 0;
 
             if (!canvasHeightGreater &&
-                canvasAscent + canvasDescent > viewportHeight - currHThickness) {
+               canvasAscent + canvasDescent
+               > viewportHeight - actualHScrollbarThickness) {
                canvasHeightGreater = true;
-               DBG_OBJ_SET_SYM ("canvasHeightGreater",
-                                canvasHeightGreater ? "true" : "false");
-               containerSizeChanged ();
+               setSizeHints ();
+               /* May queue a new resize. */
             }
 
             // Set viewport sizes.
             view->setViewportSize (viewportWidth, viewportHeight,
-                                   currHThickness, currVThickness);
+                                   actualHScrollbarThickness,
+                                   actualVScrollbarThickness);
          }
-
-         // views are redrawn via Widget::resizeDrawImpl ()
       }
+
+     // views are redrawn via Widget::resizeDrawImpl ()
+
    }
+
    updateAnchor ();
+}
 
-   DBG_OBJ_MSGF ("resize", 1,
-                 "after resizeIdle: resizeIdleId = %d", resizeIdleId);
-   DBG_OBJ_LEAVE ();
-
-   leaveResizeIdle ();
+void Layout::setSizeHints ()
+{
+   if (topLevel) {
+      topLevel->setWidth (viewportWidth
+                          - (canvasHeightGreater ? vScrollbarThickness : 0));
+      topLevel->setAscent (viewportHeight - hScrollbarThickness);
+      topLevel->setDescent (0);
+   }
 }
 
 void Layout::queueDraw (int x, int y, int width, int height)
@@ -1024,21 +747,13 @@ void Layout::queueDrawExcept (int x, int y, int width, int height,
    queueDraw (ix2, iy1, x + width - ix2, iy2 - iy1);
 }
 
-void Layout::queueResize (bool extremesChanged)
+void Layout::queueResize ()
 {
-   DBG_OBJ_ENTER ("resize", 0, "queueResize", "%s",
-                  extremesChanged ? "true" : "false");
-
    if (resizeIdleId == -1) {
       view->cancelQueueDraw ();
 
       resizeIdleId = platform->addIdle (&Layout::resizeIdle);
-      DBG_OBJ_MSGF ("resize", 1, "setting resizeIdleId = %d", resizeIdleId);
    }
-
-   emitter.emitResizeQueued (extremesChanged);
-
-   DBG_OBJ_LEAVE ();
 }
 
 
@@ -1058,7 +773,7 @@ bool Layout::buttonEvent (ButtonEventType type, View *view, int numPressed,
    event.button = button;
    event.numPressed = numPressed;
 
-   return processMouseEvent (&event, type);
+   return processMouseEvent (&event, type, true);
 }
 
 /**
@@ -1067,7 +782,7 @@ bool Layout::buttonEvent (ButtonEventType type, View *view, int numPressed,
  *
  * Arguments are similar to dw::core::Layout::buttonPress.
  */
-bool Layout::motionNotify (View *view, int x, int y, ButtonState state)
+bool Layout::motionNotify (View *view,  int x, int y, ButtonState state)
 {
    EventButton event;
 
@@ -1077,7 +792,7 @@ bool Layout::motionNotify (View *view, int x, int y, ButtonState state)
    event.yCanvas = y;
    event.state = state;
 
-   return processMouseEvent (&event, MOTION_NOTIFY);
+   return processMouseEvent (&event, MOTION_NOTIFY, true);
 }
 
 /**
@@ -1131,18 +846,12 @@ void Layout::leaveNotify (View *view, ButtonState state)
  */
 Widget *Layout::getWidgetAtPoint (int x, int y)
 {
-   DBG_OBJ_ENTER ("events", 0, "getWidgetAtPoint", "%d, %d", x, y);
-   Widget *widget;
-
-   if (topLevel && topLevel->wasAllocated ()) {
-      GettingWidgetAtPointContext context;
-      widget = topLevel->getWidgetAtPoint (x, y, &context);
-   } else
-      widget = NULL;
-
-   DBG_OBJ_MSGF ("events", 0, "=> %p", widget);
-   DBG_OBJ_LEAVE ();
-   return widget;
+   _MSG ("------------------------------------------------------------\n");
+   _MSG ("widget at (%d, %d)\n", x, y);
+   if (topLevel)
+      return topLevel->getWidgetAtPoint (x, y, 0);
+   else
+      return NULL;
 }
 
 
@@ -1152,16 +861,12 @@ Widget *Layout::getWidgetAtPoint (int x, int y)
  */
 void Layout::moveToWidget (Widget *newWidgetAtPoint, ButtonState state)
 {
-   DBG_OBJ_ENTER ("events", 0, "moveToWidget", "%p, %d",
-                  newWidgetAtPoint, state);
-
    Widget *ancestor, *w;
    Widget **track;
    int trackLen, i, i_a;
    EventCrossing crossingEvent;
 
-   DBG_OBJ_MSGF ("events", 1, "(old) widgetAtPoint = %p", widgetAtPoint);
-
+   _MSG("moveToWidget: wap=%p nwap=%p\n",widgetAtPoint,newWidgetAtPoint);
    if (newWidgetAtPoint != widgetAtPoint) {
       // The mouse pointer has been moved into another widget.
       if (newWidgetAtPoint && widgetAtPoint)
@@ -1231,8 +936,6 @@ void Layout::moveToWidget (Widget *newWidgetAtPoint, ButtonState state)
       widgetAtPoint = newWidgetAtPoint;
       updateCursor ();
    }
-
-   DBG_OBJ_LEAVE ();
 }
 
 /**
@@ -1242,37 +945,12 @@ void Layout::moveToWidget (Widget *newWidgetAtPoint, ButtonState state)
  * has been called before.
  */
 bool Layout::processMouseEvent (MousePositionEvent *event,
-                                ButtonEventType type)
+                                ButtonEventType type, bool mayBeSuppressed)
 {
    Widget *widget;
 
-   /*
-    * If the event is outside of the visible region of the canvas, treat it
-    * as occurring at the region's edge. Notably, this helps when selecting
-    * text.
-    */
-   if (event->xCanvas < scrollX)
-      event->xCanvas = scrollX;
-   else {
-      int maxX = scrollX + viewportWidth - currVScrollbarThickness() - 1;
-
-      if (event->xCanvas > maxX)
-         event->xCanvas = maxX;
-   }
-   if (event->yCanvas < scrollY)
-      event->yCanvas = scrollY;
-   else {
-      int maxY = misc::min(scrollY + viewportHeight -currHScrollbarThickness(),
-                           canvasAscent + canvasDescent) - 1;
-
-      if (event->yCanvas > maxY)
-         event->yCanvas = maxY;
-   }
-
-   widget = getWidgetAtPoint(event->xCanvas, event->yCanvas);
-
-   for (; widget; widget = widget->getParent ()) {
-      if (widget->isButtonSensitive ()) {
+   for (widget = widgetAtPoint; widget; widget = widget->getParent ()) {
+      if (!mayBeSuppressed || widget->isButtonSensitive ()) {
          event->xWidget = event->xCanvas - widget->getAllocation()->x;
          event->yWidget = event->yCanvas - widget->getAllocation()->y;
 
@@ -1321,37 +999,25 @@ void Layout::scrollPosChanged (View *view, int x, int y)
  */
 void Layout::viewportSizeChanged (View *view, int width, int height)
 {
-   DBG_OBJ_ENTER ("resize", 0, "viewportSizeChanged", "%p, %d, %d",
-                 view, width, height);
+   _MSG("Layout::viewportSizeChanged w=%d h=%d new_w=%d new_h=%d\n",
+        viewportWidth, viewportHeight, width, height);
 
-   /* If size changes, redraw this view. */
-   if (viewportWidth != width || viewportHeight != height) {
-      canvasHeightGreater = false;   // reset value here
-      viewportWidth = width;
-      viewportHeight = height;
-      resizeCounter = 0;
-      containerSizeChanged ();
+   /* If the width has become higher, we test again, whether the vertical
+    * scrollbar (so to speak) can be hidden again. */
+   if (usesViewport && width > viewportWidth)
+      canvasHeightGreater = false;
 
-      DBG_OBJ_SET_SYM ("canvasHeightGreater",
-                       canvasHeightGreater ? "true" : "false");
-      DBG_OBJ_SET_NUM ("viewportWidth", viewportWidth);
-      DBG_OBJ_SET_NUM ("viewportHeight", viewportHeight);
-   }
+   /* if size changes, redraw this view.
+    * TODO: this is a resize call (redraw/resize code needs a review). */
+   if (viewportWidth != width || viewportHeight != height)
+      queueResize();
 
-   DBG_OBJ_LEAVE ();
+   viewportWidth = width;
+   viewportHeight = height;
+
+   setSizeHints ();
 }
 
-void Layout::containerSizeChanged ()
-{
-   DBG_OBJ_ENTER0 ("resize", 0, "containerSizeChanged");
-
-   if (topLevel) {
-      topLevel->containerSizeChanged ();
-      queueResize (true);
-   }
-
-   DBG_OBJ_LEAVE ();
-}
-
-} // namespace core
 } // namespace dw
+} // namespace core
+

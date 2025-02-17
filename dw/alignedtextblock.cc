@@ -20,7 +20,6 @@
 
 
 #include "alignedtextblock.hh"
-#include "../lout/debug.hh"
 #include <stdio.h>
 
 namespace dw {
@@ -63,7 +62,6 @@ int AlignedTextblock::CLASS_ID = -1;
 AlignedTextblock::AlignedTextblock (bool limitTextWidth):
    Textblock (limitTextWidth)
 {
-   DBG_OBJ_CREATE ("dw::AlignedTextblock");
    registerName ("dw::AlignedTextblock", &CLASS_ID);
 }
 
@@ -81,7 +79,6 @@ void AlignedTextblock::setRefTextblock (AlignedTextblock *ref)
 AlignedTextblock::~AlignedTextblock()
 {
    list->unref (listPos);
-   DBG_OBJ_DELETE ();
 }
 
 void AlignedTextblock::updateValue ()

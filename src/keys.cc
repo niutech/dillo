@@ -2,7 +2,6 @@
  * Key parser
  *
  * Copyright (C) 2009 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,7 +15,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#include "dlib/dlib.h"
+#include "../dlib/dlib.h"
 #include "keys.hh"
 #include "utf8.hh"
 #include "msg.h"
@@ -60,7 +59,6 @@ static const Mapping_t keyNames[] = {
    { "Home",        FL_Home      },
    { "Insert",      FL_Insert    },
    { "Left",        FL_Left      },
-   { "Menu",        FL_Menu      },
    { "PageDown",    FL_Page_Down },
    { "PageUp",      FL_Page_Up   },
    { "Print",       FL_Print     },
@@ -101,53 +99,59 @@ static const Mapping_t modifierNames[] = {
 static const KeyBinding_t default_keys[] = {
    { "nop"          , KEYS_NOP          , 0         , 0               },
    { "open"         , KEYS_OPEN         , FL_CTRL   , 'o'             },
+#ifdef ENABLE_PRINTER
+   { "print"        , KEYS_PRINT        , FL_CTRL   , 'p'             },
+#endif /* ENABLE_PRINTER */
    { "new-window"   , KEYS_NEW_WINDOW   , FL_CTRL   , 'n'             },
    { "new-tab"      , KEYS_NEW_TAB      , FL_CTRL   , 't'             },
    { "left-tab"     , KEYS_LEFT_TAB     , FL_CTRL |
                                           FL_SHIFT  , FL_Tab          },
-   { "left-tab"     , KEYS_LEFT_TAB     , FL_CTRL   , FL_Page_Up      },
    { "right-tab"    , KEYS_RIGHT_TAB    , FL_CTRL   , FL_Tab          },
-   { "right-tab"    , KEYS_RIGHT_TAB    , FL_CTRL   , FL_Page_Down    },
    { "close-tab"    , KEYS_CLOSE_TAB    , FL_CTRL   , 'w'             },
+   { "copy"         , KEYS_COPY         , FL_CTRL   , 'c'             },
    { "find"         , KEYS_FIND         , FL_CTRL   , 'f'             },
-   { "websearch"    , KEYS_WEBSEARCH    , FL_CTRL   , 's'             },
-   { "bookmarks"    , KEYS_BOOKMARKS    , FL_CTRL   , 'b'             },
+   { "find"         , KEYS_FIND         , 0         , '/'             },
+   { "websearch"    , KEYS_WEBSEARCH    , FL_CTRL   , 'k'             },
+   { "bookmarks"    , KEYS_BOOKMARKS    , FL_ALT    , 'b'             },
+   { "add-bookmark" , KEYS_ADD_BOOKMARK , FL_CTRL   , 'd'             },
    { "reload"       , KEYS_RELOAD       , FL_CTRL   , 'r'             },
-   { "stop"         , KEYS_STOP         , 0         , 0               },
-   { "save"         , KEYS_SAVE         , 0         , 0               },
-   { "hide-panels"  , KEYS_HIDE_PANELS  , 0         , FL_Escape       },
+   { "reload"       , KEYS_RELOAD       , 0         , FL_F + 5        },
+   { "stop"         , KEYS_STOP         , FL_ALT    , 's'             },
+   { "stop"         , KEYS_STOP         , 0         , FL_Escape       },
+   { "save"         , KEYS_SAVE         , FL_CTRL   , 's'             },
+   { "hide-panels"  , KEYS_HIDE_PANELS  , 0         , FL_F + 11       },
    { "file-menu"    , KEYS_FILE_MENU    , FL_ALT    , 'f'             },
    { "close-all"    , KEYS_CLOSE_ALL    , FL_CTRL   , 'q'             },
    { "back"         , KEYS_BACK         , 0         , FL_BackSpace    },
    { "back"         , KEYS_BACK         , 0         , ','             },
+   { "back"         , KEYS_BACK         , FL_ALT    , FL_Left         },
    { "forward"      , KEYS_FORWARD      , FL_SHIFT  , FL_BackSpace    },
    { "forward"      , KEYS_FORWARD      , 0         , '.'             },
+   { "forward"      , KEYS_FORWARD      , FL_ALT    , FL_Right        },
    { "goto"         , KEYS_GOTO         , FL_CTRL   , 'l'             },
+   { "goto"         , KEYS_GOTO         , FL_ALT    , 'd'             },
    { "home"         , KEYS_HOME         , FL_CTRL   , 'h'             },
-   { "view-source"  , KEYS_VIEW_SOURCE  , FL_CTRL   , 'u'             },
+   { "home"         , KEYS_HOME         , FL_ALT    , FL_Home         },
+   { "help"         , KEYS_HELP         , 0         , FL_F + 1        },
    { "screen-up"    , KEYS_SCREEN_UP    , 0         , FL_Page_Up      },
    { "screen-up"    , KEYS_SCREEN_UP    , 0         , 'b'             },
    { "screen-down"  , KEYS_SCREEN_DOWN  , 0         , FL_Page_Down    },
    { "screen-down"  , KEYS_SCREEN_DOWN  , 0         , ' '             },
-   { "screen-left"  , KEYS_SCREEN_LEFT  , 0         , 0               },
-   { "screen-right" , KEYS_SCREEN_RIGHT , 0         , 0               },
    { "line-up"      , KEYS_LINE_UP      , 0         , FL_Up           },
    { "line-down"    , KEYS_LINE_DOWN    , 0         , FL_Down         },
    { "left"         , KEYS_LEFT         , 0         , FL_Left         },
    { "right"        , KEYS_RIGHT        , 0         , FL_Right        },
    { "top"          , KEYS_TOP          , 0         , FL_Home         },
    { "bottom"       , KEYS_BOTTOM       , 0         , FL_End          },
-   { "zoom-in"      , KEYS_ZOOM_IN      , FL_CTRL   , '+'             },
-   { "zoom-in"      , KEYS_ZOOM_IN      , FL_CTRL   , '=' /* US + */  },
-   { "zoom-out"     , KEYS_ZOOM_OUT     , FL_CTRL   , '-'             },
-   { "zoom-reset"   , KEYS_ZOOM_RESET   , FL_CTRL   , '0'             },
+   { "preferences"  , KEYS_PREFERENCES  , 0         , 0               },
+   { "view-source"  , KEYS_VIEW_SOURCE  , FL_CTRL   , 'u'             },
 };
 
 static Dlist *bindings;
 
 
 
-/**
+/*
  * Initialize the bindings list
  */
 void Keys::init()
@@ -156,7 +160,7 @@ void Keys::init()
 
    // Fill our key bindings list
    bindings = dList_new(32);
-   for (uint_t i = 0; i < sizeof(default_keys) / sizeof(default_keys[0]); i++) {
+   for (uint_t i = 0; i < sizeof(default_keys) / sizeof(KeyBinding_t); i++) {
       if (default_keys[i].key) {
          node = dNew(KeyBinding_t, 1);
          node->name = dStrdup(default_keys[i].name);
@@ -168,7 +172,7 @@ void Keys::init()
    }
 }
 
-/**
+/*
  * Free data
  */
 void Keys::free()
@@ -183,7 +187,7 @@ void Keys::free()
    dList_free(bindings);
 }
 
-/**
+/*
  * Compare function by {key,modifier} pairs.
  */
 int Keys::nodeByKeyCmp(const void *node, const void *key)
@@ -193,7 +197,7 @@ int Keys::nodeByKeyCmp(const void *node, const void *key)
    return (n->key != k->key) ? (n->key - k->key) : (n->modifier - k->modifier);
 }
 
-/**
+/*
  * Look if the just pressed key is bound to a command.
  * Return value: The command if found, KEYS_NOP otherwise.
  */
@@ -226,7 +230,7 @@ KeysCommand_t Keys::getKeyCmd()
    return ret;
 }
 
-/**
+/*
  * Remove a key binding from the table.
  */
 void Keys::delKeyCmd(int key, int mod)
@@ -243,7 +247,7 @@ void Keys::delKeyCmd(int key, int mod)
    }
 }
 
-/**
+/*
  * Takes a key name and looks it up in the mapping table. If
  * found, its key code is returned. Otherwise -1 is given
  * back.
@@ -251,8 +255,8 @@ void Keys::delKeyCmd(int key, int mod)
 int Keys::getKeyCode(char *keyName)
 {
    uint_t i;
-   for (i = 0; i < sizeof(keyNames) / sizeof(keyNames[0]); i++) {
-      if (!dStrAsciiCasecmp(keyNames[i].name, keyName)) {
+   for (i = 0; i < sizeof(keyNames) / sizeof(Mapping_t); i++) {
+      if (!dStrcasecmp(keyNames[i].name, keyName)) {
          return keyNames[i].value;
       }
    }
@@ -260,7 +264,7 @@ int Keys::getKeyCode(char *keyName)
    return -1;
 }
 
-/**
+/*
  * Takes a command name and searches it in the mapping table.
  * Return value: command code if found, -1 otherwise
  */
@@ -269,21 +273,21 @@ KeysCommand_t Keys::getCmdCode(const char *commandName)
    uint_t i;
 
    for (i = 0; i < sizeof(default_keys) / sizeof(KeyBinding_t); i++) {
-      if (!dStrAsciiCasecmp(default_keys[i].name, commandName))
+      if (!dStrcasecmp(default_keys[i].name, commandName))
          return default_keys[i].cmd;
    }
    return KEYS_INVALID;
 }
 
-/**
+/*
  * Takes a modifier name and looks it up in the mapping table. If
  * found, its key code is returned. Otherwise -1 is given back.
  */
 int Keys::getModifier(char *modifierName)
 {
    uint_t i;
-   for (i = 0; i < sizeof(modifierNames) / sizeof(modifierNames[0]); i++) {
-      if (!dStrAsciiCasecmp(modifierNames[i].name, modifierName)) {
+   for (i = 0; i < sizeof(modifierNames) / sizeof(Mapping_t); i++) {
+      if (!dStrcasecmp(modifierNames[i].name, modifierName)) {
          return modifierNames[i].value;
       }
    }
@@ -291,7 +295,7 @@ int Keys::getModifier(char *modifierName)
    return -1;
 }
 
-/**
+/*
  * Given a keys command, return a shortcut for it, or 0 if there is none
  * (e.g., for KEYS_NEW_WINDOW, return CTRL+'n').
  */
@@ -307,7 +311,7 @@ int Keys::getShortcut(KeysCommand_t cmd)
    return 0;
 }
 
-/**
+/*
  * Parse a key-combination/command-name pair, and
  * insert it into the bindings list.
  */
@@ -373,7 +377,7 @@ void Keys::parseKey(char *key, char *commandName)
    }
 }
 
-/**
+/*
  * Parse the keysrc.
  */
 void Keys::parse(FILE *fp)

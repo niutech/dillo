@@ -15,7 +15,7 @@
 # Required binaries check
 #          
 check_bin_file(){
-   command -v $1 > /dev/null 2>&1
+   which $1 > /dev/null 2>&1
    if [ $? = 0 ]; then
       return 0
    else

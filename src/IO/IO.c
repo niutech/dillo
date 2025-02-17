@@ -2,6 +2,7 @@
  * File: IO.c
  *
  * Copyright (C) 2000-2007 Jorge Arellano Cid <jcid@dillo.org>
+ * Copyright (C) 2010 Benjamin Johnson <obeythepenguin@users.sourceforge.net>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -9,19 +10,20 @@
  * (at your option) any later version.
  */
 
-/** @file
+/*
  * Dillo's event driven IO engine
  */
 
 #include <errno.h>
-#include <fcntl.h>
 #include <unistd.h>
 #include "../msg.h"
 #include "../chain.h"
 #include "../klist.h"
 #include "IO.h"
 #include "iowatch.hh"
-#include "tls.h"
+
+#include "dlib/dfcntl.h"
+#include "dlib/dsock.h"
 
 /*
  * Symbolic defines for shutdown() function
@@ -36,7 +38,8 @@ typedef struct {
    int Key;               /* Primary Key (for klist) */
    int Op;                /* IORead | IOWrite */
    int FD;                /* Current File Descriptor */
-   int Status;            /* nonzero upon IO failure */
+   int Flags;             /* Flag array (look definitions above) */
+   int Status;            /* errno code */
    Dstr *Buf;             /* Internal buffer */
 
    void *Info;            /* CCC Info structure for this IO */
@@ -58,7 +61,7 @@ void a_IO_ccc(int Op, int Branch, int Dir, ChainLink *Info,
 
 /* IO API  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-/**
+/*
  * Return a new, initialized, 'io' struct
  */
 static IOData_t *IO_new(int op)
@@ -66,6 +69,7 @@ static IOData_t *IO_new(int op)
    IOData_t *io = dNew0(IOData_t, 1);
    io->Op = op;
    io->FD = -1;
+   io->Flags = 0;
    io->Key = 0;
    io->Buf = dStr_sized_new(IOBufLen);
 
@@ -74,7 +78,7 @@ static IOData_t *IO_new(int op)
 
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-/**
+/*
  * Register an IO in ValidIOs
  */
 static void IO_ins(IOData_t *io)
@@ -86,7 +90,7 @@ static void IO_ins(IOData_t *io)
        io->Key, a_Klist_length(ValidIOs));
 }
 
-/**
+/*
  * Remove an IO from ValidIOs
  */
 static void IO_del(IOData_t *io)
@@ -98,7 +102,7 @@ static void IO_del(IOData_t *io)
    _MSG(" -->ValidIOs: %d\n", a_Klist_length(ValidIOs));
 }
 
-/**
+/*
  * Return a io by its Key (NULL if not found)
  */
 static IOData_t *IO_get(int Key)
@@ -106,7 +110,7 @@ static IOData_t *IO_get(int Key)
    return (IOData_t *)a_Klist_get_data(ValidIOs, Key);
 }
 
-/**
+/*
  * Free an 'io' struct
  */
 static void IO_free(IOData_t *io)
@@ -115,7 +119,7 @@ static void IO_free(IOData_t *io)
    dFree(io);
 }
 
-/**
+/*
  * Close an open FD, and remove io controls.
  * (This function can be used for Close and Abort operations)
  * BUG: there's a race condition for Abort. The file descriptor is closed
@@ -124,15 +128,19 @@ static void IO_free(IOData_t *io)
  */
 static void IO_close_fd(IOData_t *io, int CloseCode)
 {
+   int st;
    int events = 0;
 
-   _MSG("====> begin IO_close_fd (%d) Key=%d CloseCode=%d ",
-       io->FD, io->Key, CloseCode);
+   _MSG("====> begin IO_close_fd (%d) Key=%d CloseCode=%d Flags=%d ",
+       io->FD, io->Key, CloseCode, io->Flags);
 
    /* With HTTP, if we close the writing part, the reading one also gets
-    * closed! */
-   if ((CloseCode == IO_StopRdWr) && io->FD != -1) {
-      dClose(io->FD);
+    * closed! (other clients may set 'IOFlag_ForceClose') */
+   if (((io->Flags & IOFlag_ForceClose) || (CloseCode == IO_StopRdWr)) &&
+       io->FD != -1) {
+      do
+         st = dClose(io->FD);
+      while (st < 0 && errno == EINTR);
    } else {
       _MSG(" NOT CLOSING ");
    }
@@ -151,7 +159,7 @@ static void IO_close_fd(IOData_t *io, int CloseCode)
    _MSG(" end IO close (%d) <=====\n", io->FD);
 }
 
-/**
+/*
  * Read data from a file descriptor into a specific buffer
  */
 static bool_t IO_read(IOData_t *io)
@@ -160,7 +168,6 @@ static bool_t IO_read(IOData_t *io)
    ssize_t St;
    bool_t ret = FALSE;
    int io_key = io->Key;
-   void *conn = a_Tls_connection(io->FD);
 
    _MSG("  IO_read\n");
 
@@ -169,8 +176,7 @@ static bool_t IO_read(IOData_t *io)
    io->Status = 0;
 
    while (1) {
-      St = conn ? a_Tls_read(conn, Buf, IOBufLen)
-                : read(io->FD, Buf, IOBufLen);
+      St = dRead(io->FD, Buf, IOBufLen);
       if (St > 0) {
          dStr_append_l(io->Buf, Buf, St);
          continue;
@@ -180,15 +186,16 @@ static bool_t IO_read(IOData_t *io)
          } else if (errno == EAGAIN) {
             ret = TRUE;
             break;
+#ifdef MSDOS
+         } else if (errno == EWOULDBLOCK) {
+            /* On most systems this is the same as EAGAIN, but on Watt-32
+             * it's a separate error and handling it like EAGAIN will cause
+             * Dillo to crash.  Thanks to Georg Potthast. */
+            continue;
+#endif /* MSDOS */
          } else {
-            if (conn) {
-               io->Status = St;
-               break;
-            } else {
-               io->Status = errno;
-               MSG("READ Failed with %d: %s\n", (int)St, strerror(errno));
-               break;
-            }
+            io->Status = errno;
+            break;
          }
       } else { /* St == 0 */
          break;
@@ -213,21 +220,19 @@ static bool_t IO_read(IOData_t *io)
    return ret;
 }
 
-/**
+/*
  * Write data, from a specific buffer, into a file descriptor
  */
 static bool_t IO_write(IOData_t *io)
 {
    ssize_t St;
    bool_t ret = FALSE;
-   void *conn = a_Tls_connection(io->FD);
 
    _MSG("  IO_write\n");
    io->Status = 0;
 
    while (1) {
-      St = conn ? a_Tls_write(conn, io->Buf->str, io->Buf->len)
-                : write(io->FD, io->Buf->str, io->Buf->len);
+      St = dWrite(io->FD, io->Buf->str, io->Buf->len);
       if (St < 0) {
          /* Error */
          if (errno == EINTR) {
@@ -235,15 +240,14 @@ static bool_t IO_write(IOData_t *io)
          } else if (errno == EAGAIN) {
             ret = TRUE;
             break;
+#ifdef MSDOS
+         } else if (errno == EWOULDBLOCK) {
+            /* See IO_Read */
+            continue;
+#endif /* MSDOS */
          } else {
-            if (conn) {
-               io->Status = St;
-               break;
-            } else {
-               io->Status = errno;
-               MSG("WRITE Failed with %d: %s\n", (int)St, strerror(errno));
-               break;
-            }
+            io->Status = errno;
+            break;
          }
       } else if (St < io->Buf->len) {
          /* Not all data written */
@@ -258,8 +262,8 @@ static bool_t IO_write(IOData_t *io)
    return ret;
 }
 
-/**
- * Handle background IO for a given FD (reads | writes).
+/*
+ * Handle background IO for a given FD (reads | writes)
  * (This function gets called when there's activity in the FD)
  */
 static int IO_callback(IOData_t *io)
@@ -277,7 +281,7 @@ static int IO_callback(IOData_t *io)
    return (ret) ? 1 : 0;
 }
 
-/**
+/*
  * Handle the READ event of a FD.
  */
 static void IO_fd_read_cb(int fd, void *data)
@@ -293,14 +297,10 @@ static void IO_fd_read_cb(int fd, void *data)
    } else {
       if (IO_callback(io) == 0)
          a_IOwatch_remove_fd(fd, DIO_READ);
-      if ((io = IO_get(io_key)) && io->Status) {
-         /* check io because IO_read OpSend could trigger abort */
-         a_IO_ccc(OpAbort, 2, FWD, io->Info, io, NULL);
-      }
    }
 }
 
-/**
+/*
  * Handle the WRITE event of a FD.
  */
 static void IO_fd_write_cb(int fd, void *data)
@@ -316,12 +316,10 @@ static void IO_fd_write_cb(int fd, void *data)
    } else {
       if (IO_callback(io) == 0)
          a_IOwatch_remove_fd(fd, DIO_WRITE);
-      if (io->Status)
-         a_IO_ccc(OpAbort, 1, FWD, io->Info, NULL, NULL);
    }
 }
 
-/**
+/*
  * Receive an IO request (IORead | IOWrite),
  * Set a watch for it, and let it flow!
  */
@@ -339,8 +337,8 @@ static void IO_submit(IOData_t *r_io)
         (r_io->Op == IORead) ? "IORead" : "IOWrite", r_io->FD);
 
    /* Set FD to background and to close on exec. */
-   fcntl(r_io->FD, F_SETFL, O_NONBLOCK | fcntl(r_io->FD, F_GETFL));
-   fcntl(r_io->FD, F_SETFD, FD_CLOEXEC | fcntl(r_io->FD, F_GETFD));
+   dFcntl(r_io->FD, F_SETFL, O_NONBLOCK | dFcntl(r_io->FD, F_GETFL));
+   dFcntl(r_io->FD, F_SETFD, FD_CLOEXEC | dFcntl(r_io->FD, F_GETFD));
 
    if (r_io->Op == IORead) {
       a_IOwatch_add_fd(r_io->FD, DIO_READ,
@@ -352,8 +350,8 @@ static void IO_submit(IOData_t *r_io)
    }
 }
 
-/**
- * CCC function for the IO module.
+/*
+ * CCC function for the IO module
  * ( Data1 = IOData_t* ; Data2 = NULL )
  */
 void a_IO_ccc(int Op, int Branch, int Dir, ChainLink *Info,
@@ -370,7 +368,6 @@ void a_IO_ccc(int Op, int Branch, int Dir, ChainLink *Info,
          switch (Op) {
          case OpStart:
             io = IO_new(IOWrite);
-            io->Info = Info;
             Info->LocalKey = io;
             break;
          case OpSend:
@@ -387,11 +384,8 @@ void a_IO_ccc(int Op, int Branch, int Dir, ChainLink *Info,
          case OpAbort:
             io = Info->LocalKey;
             if (io->Buf->len > 0) {
-               char *newline = memchr(io->Buf->str, '\n', io->Buf->len);
-               int msglen = newline ? newline - io->Buf->str : 2048;
-
-               MSG("IO_write, closing with pending data not sent: \"%s\"\n",
-                   dStr_printable(io->Buf, msglen));
+               MSG_WARN("IO_write, closing with pending data not sent\n");
+               MSG_WARN(" \"%s\"\n", dStr_printable(io->Buf, 2048));
             }
             /* close FD, remove from ValidIOs and remove its watch */
             IO_close_fd(io, Op == OpEnd ? IO_StopWr : IO_StopRdWr);
@@ -399,21 +393,14 @@ void a_IO_ccc(int Op, int Branch, int Dir, ChainLink *Info,
             dFree(Info);
             break;
          default:
-            MSG_WARN("Unused CCC IO 1B\n");
+            MSG_WARN("Unused CCC\n");
             break;
          }
       } else {  /* 1 FWD */
          /* Write-data status */
          switch (Op) {
-         case OpAbort:
-            io = Info->LocalKey;
-            IO_close_fd(io, IO_StopRdWr);
-            IO_free(io);
-            a_Chain_fcb(OpAbort, Info, NULL, NULL);
-            dFree(Info);
-            break;
          default:
-            MSG_WARN("Unused CCC IO 1F\n");
+            MSG_WARN("Unused CCC\n");
             break;
          }
       }
@@ -434,15 +421,14 @@ void a_IO_ccc(int Op, int Branch, int Dir, ChainLink *Info,
                IO_submit(io);
             }
             break;
-         case OpEnd:
          case OpAbort:
             io = Info->LocalKey;
-            IO_close_fd(io, Op == OpEnd ? IO_StopRd : IO_StopRdWr);
+            IO_close_fd(io, IO_StopRdWr);
             IO_free(io);
             dFree(Info);
             break;
          default:
-            MSG_WARN("Unused CCC IO 2B\n");
+            MSG_WARN("Unused CCC\n");
             break;
          }
       } else {  /* 2 FWD */
@@ -455,14 +441,13 @@ void a_IO_ccc(int Op, int Branch, int Dir, ChainLink *Info,
             dFree(dbuf);
             break;
          case OpEnd:
-         case OpAbort:
-            a_Chain_fcb(Op, Info, NULL, NULL);
+            a_Chain_fcb(OpEnd, Info, NULL, NULL);
             IO_close_fd(io, IO_StopRdWr); /* IO_StopRd would leak FDs */
             IO_free(io);
             dFree(Info);
             break;
          default:
-            MSG_WARN("Unused CCC IO 2F\n");
+            MSG_WARN("Unused CCC\n");
             break;
          }
       }

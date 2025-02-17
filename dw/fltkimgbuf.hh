@@ -11,13 +11,6 @@ namespace fltk {
 class FltkImgbuf: public core::Imgbuf
 {
 private:
-   class GammaCorrectionTable: public lout::object::Object
-   {
-   public:
-      double gamma;
-      uchar map[256];
-   };
-
    FltkImgbuf *root;
    int refCount;
    bool deleteOnUnref;
@@ -25,7 +18,6 @@ private:
 
    int width, height;
    Type type;
-   double gamma;
 
 //{
    int bpp;
@@ -36,17 +28,9 @@ private:
    // the image buffer.
    lout::misc::BitSet *copiedRows;
 
-   static lout::container::typed::Vector <GammaCorrectionTable>
-      *gammaCorrectionTables;
-
-   static uchar *findGammaCorrectionTable (double gamma);
-   static bool excessiveImageDimensions (int width, int height);
-
-   FltkImgbuf (Type type, int width, int height, double gamma,
-               FltkImgbuf *root);
-   void init (Type type, int width, int height, double gamma, FltkImgbuf *root);
+   FltkImgbuf (Type type, int width, int height, FltkImgbuf *root);
+   void init (Type type, int width, int height, FltkImgbuf *root);
    int scaledY(int ySrc);
-   int backscaledY(int yScaled);
    int isRoot() { return (root == NULL); }
    void detachScaledBuf (FltkImgbuf *scaledBuf);
 
@@ -54,28 +38,16 @@ protected:
    ~FltkImgbuf ();
 
 public:
-   FltkImgbuf (Type type, int width, int height, double gamma);
-
-   static void freeall ();
+   FltkImgbuf (Type type, int width, int height);
 
    void setCMap (int *colors, int num_colors);
    inline void scaleRow (int row, const core::byte *data);
-   inline void scaleRowSimple (int row, const core::byte *data);
-   inline void scaleRowBeautiful (int row, const core::byte *data);
-   inline static void scaleBuffer (const core::byte *src, int srcWidth,
-                                   int srcHeight, core::byte *dest,
-                                   int destWidth, int destHeight, int bpp,
-                                   double gamma);
-
    void newScan ();
    void copyRow (int row, const core::byte *data);
    core::Imgbuf* getScaledBuf (int width, int height);
    void getRowArea (int row, dw::core::Rectangle *area);
    int  getRootWidth ();
    int  getRootHeight ();
-   core::Imgbuf *createSimilarBuf (int width, int height);
-   void copyTo (Imgbuf *dest, int xDestRoot, int yDestRoot,
-                int xSrc, int ySrc, int widthSrc, int heightSrc);
    void ref ();
    void unref ();
 
@@ -87,7 +59,7 @@ public:
               int x, int y, int width, int height);
 };
 
-} // namespace fltk
 } // namespace dw
+} // namespace fltk
 
 #endif // __DW_FLTK_IMGBUF_HH__

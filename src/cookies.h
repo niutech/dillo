@@ -5,17 +5,17 @@
 extern "C" {
 #endif /* __cplusplus */
 
-void  a_Cookies_init( void );
 
 #ifdef DISABLE_COOKIES
-# define a_Cookies_get_query(url, requester)  dStrdup("")
+# define a_Cookies_get_query(url)  dStrdup("")
 # define a_Cookies_set()     ;
+# define a_Cookies_init()    ;
 # define a_Cookies_freeall() ;
 #else
-  char *a_Cookies_get_query(const DilloUrl *query_url,
-                            const DilloUrl *requester);
+  char *a_Cookies_get_query(const DilloUrl *request_url);
   void  a_Cookies_set(Dlist *cookie_string, const DilloUrl *set_url,
                       const char *server_date);
+  void  a_Cookies_init( void );
   void  a_Cookies_freeall( void );
 #endif
 

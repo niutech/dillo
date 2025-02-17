@@ -19,7 +19,7 @@
 #include "msg.h"
 #include "misc.h"
 
-/**
+/*
  * Escape characters as %XX sequences.
  * Return value: New string.
  */
@@ -47,7 +47,7 @@ char *a_Misc_escape_chars(const char *str, const char *esc_set)
 }
 
 #define TAB_SIZE 8
-/**
+/*
  * Takes a string and converts any tabs to spaces.
  */
 int
@@ -97,7 +97,7 @@ a_Misc_expand_tabs(char **start, char *end, char *buf, int buflen)
 }
 
 /* TODO: could use dStr ADT! */
-typedef struct {
+typedef struct ContentType_ {
    const char *str;
    int len;
 } ContentType_t;
@@ -115,7 +115,6 @@ static const ContentType_t MimeTypes[] = {
 
 typedef enum {
    DT_OCTET_STREAM = 0,
-   DT_PLACEHOLDER,
    DT_TEXT_HTML,
    DT_TEXT_PLAIN,
    DT_IMAGE_GIF,
@@ -123,7 +122,7 @@ typedef enum {
    DT_IMAGE_JPG,
 } DetectedContentType;
 
-/**
+/*
  * Detects 'Content-Type' from a data stream sample.
  *
  * It uses the magic(5) logic from file(1). Currently, it
@@ -142,23 +141,23 @@ int a_Misc_get_content_type_from_data(void *Data, size_t Size, const char **PT)
 
    /* HTML try */
    for (i = 0; i < Size && dIsspace(p[i]); ++i);
-   if ((Size - i >= 5  && !dStrnAsciiCasecmp(p+i, "<html", 5)) ||
-       (Size - i >= 5  && !dStrnAsciiCasecmp(p+i, "<head", 5)) ||
-       (Size - i >= 6  && !dStrnAsciiCasecmp(p+i, "<title", 6)) ||
-       (Size - i >= 14 && !dStrnAsciiCasecmp(p+i, "<!doctype html", 14)) ||
-       /* this line is workaround for FTP through the Squid proxy and Doxygen */
-       (Size - i >= 9 && !dStrnAsciiCasecmp(p+i, "<!-- HTML", 9))) {
+   if ((Size - i >= 5  && !dStrncasecmp(p+i, "<html", 5)) ||
+       (Size - i >= 5  && !dStrncasecmp(p+i, "<head", 5)) ||
+       (Size - i >= 6  && !dStrncasecmp(p+i, "<title", 6)) ||
+       (Size - i >= 14 && !dStrncasecmp(p+i, "<!doctype html", 14)) ||
+       /* this line is workaround for FTP through the Squid proxy */
+       (Size - i >= 17 && !dStrncasecmp(p+i, "<!-- HTML listing", 17))) {
 
       Type = DT_TEXT_HTML;
       st = 0;
    /* Images */
-   } else if (Size >= 4 && !strncmp(p, "GIF8", 4)) {
+   } else if (Size >= 4 && !dStrncasecmp(p, "GIF8", 4)) {
       Type = DT_IMAGE_GIF;
       st = 0;
-   } else if (Size >= 4 && !strncmp(p, "\x89PNG", 4)) {
+   } else if (Size >= 4 && !dStrncasecmp(p, "\x89PNG", 4)) {
       Type = DT_IMAGE_PNG;
       st = 0;
-   } else if (Size >= 2 && !strncmp(p, "\xff\xd8", 2)) {
+   } else if (Size >= 2 && !dStrncasecmp(p, "\xff\xd8", 2)) {
       /* JPEG has the first 2 bytes set to 0xffd8 in BigEndian - looking
        * at the character representation should be machine independent. */
       Type = DT_IMAGE_JPG;
@@ -203,7 +202,7 @@ int a_Misc_get_content_type_from_data(void *Data, size_t Size, const char **PT)
    return st;
 }
 
-/**
+/*
  * Parse Content-Type string, e.g., "text/html; charset=utf-8".
  * Content-Type is defined in RFC 2045 section 5.1.
  */
@@ -222,20 +221,20 @@ void a_Misc_parse_content_type(const char *type, char **major, char **minor,
    if (!(str = type))
       return;
 
-   for (s = str; *s && d_isascii((uchar_t)*s) && !iscntrl((uchar_t)*s) &&
-        !strchr(tspecials_space, *s); s++) ;
+   for (s = str; *s && !iscntrl((uchar_t)*s) && !strchr(tspecials_space, *s);
+        s++) ;
    if (major)
       *major = dStrndup(str, s - str);
 
    if (*s == '/') {
-      for (str = ++s; *s && d_isascii((uchar_t)*s) && !iscntrl((uchar_t)*s) &&
-           !strchr(tspecials_space, *s); s++) ;
+      for (str = ++s;
+           *s && !iscntrl((uchar_t)*s) && !strchr(tspecials_space, *s); s++) ;
       if (minor)
          *minor = dStrndup(str, s - str);
    }
    if (charset && *s &&
-       (dStrnAsciiCasecmp(type, "text/", 5) == 0 ||
-        dStrnAsciiCasecmp(type, "application/xhtml+xml", 21) == 0)) {
+       (dStrncasecmp(type, "text/", 5) == 0 ||
+        dStrncasecmp(type, "application/xhtml+xml", 21) == 0)) {
       /* "charset" parameter defined for text media type in RFC 2046,
        * application/xhtml+xml in RFC 3236.
        *
@@ -247,7 +246,7 @@ void a_Misc_parse_content_type(const char *type, char **major, char **minor,
       const char terminators[] = " ;\t";
       const char key[] = "charset";
 
-      if ((s = dStriAsciiStr(str, key)) &&
+      if ((s = dStristr(str, key)) &&
           (s == str || strchr(terminators, s[-1]))) {
          s += sizeof(key) - 1;
          for ( ; *s == ' ' || *s == '\t'; ++s);
@@ -267,7 +266,7 @@ void a_Misc_parse_content_type(const char *type, char **major, char **minor,
    }
 }
 
-/**
+/*
  * Compare two Content-Type strings.
  * Return 0 if they are equivalent, and 1 otherwise.
  */
@@ -284,12 +283,12 @@ int a_Misc_content_type_cmp(const char *ct1, const char *ct2)
    a_Misc_parse_content_type(ct1, &major1, &minor1, &charset1);
    a_Misc_parse_content_type(ct2, &major2, &minor2, &charset2);
 
-   if (major1 && major2 && !dStrAsciiCasecmp(major1, major2) &&
-       minor1 && minor2 && !dStrAsciiCasecmp(minor1, minor2) &&
+   if (major1 && major2 && !dStrcasecmp(major1, major2) &&
+       minor1 && minor2 && !dStrcasecmp(minor1, minor2) &&
        ((!charset1 && !charset2) ||
-        (charset1 && charset2 && !dStrAsciiCasecmp(charset1, charset2)) ||
-        (!charset1 && charset2 && !dStrAsciiCasecmp(charset2, "UTF-8")) ||
-        (charset1 && !charset2 && !dStrAsciiCasecmp(charset1, "UTF-8")))) {
+        (charset1 && charset2 && !dStrcasecmp(charset1, charset2)) ||
+        (!charset1 && charset2 && !dStrcasecmp(charset2, "UTF-8")) ||
+        (charset1 && !charset2 && !dStrcasecmp(charset1, "UTF-8")))) {
       ret = 0;
    } else {
       ret = 1;
@@ -301,13 +300,13 @@ int a_Misc_content_type_cmp(const char *ct1, const char *ct2)
    return ret;
 }
 
-/**
+/*
  * Check the server-supplied 'Content-Type' against our detected type.
  * (some servers seem to default to "text/plain").
  *
- * @return
- *  - 0,  if they match
- *  - -1, if a mismatch is detected
+ * Return value:
+ *  0,  if they match
+ *  -1, if a mismatch is detected
  *
  * There are many MIME types Dillo doesn't know, they're handled
  * as "application/octet-stream" (as the SPEC says).
@@ -329,23 +328,22 @@ int a_Misc_content_type_check(const char *EntryType, const char *DetectedType)
       return 0; /* there's no mismatch without server type */
 
    for (i = 1; MimeTypes[i].str; ++i)
-      if (dStrnAsciiCasecmp(EntryType, MimeTypes[i].str, MimeTypes[i].len) ==0)
+      if (dStrncasecmp(EntryType, MimeTypes[i].str, MimeTypes[i].len) == 0)
          break;
 
    if (!MimeTypes[i].str) {
       /* type not found, no mismatch */
       st = 0;
-   } else if (dStrnAsciiCasecmp(EntryType, "image/", 6) == 0 &&
-             !dStrnAsciiCasecmp(DetectedType, MimeTypes[i].str,
-                                MimeTypes[i].len)){
+   } else if (dStrncasecmp(EntryType, "image/", 6) == 0 &&
+             !dStrncasecmp(DetectedType,MimeTypes[i].str,MimeTypes[i].len)){
       /* An image, and there's an exact match */
       st = 0;
-   } else if (dStrnAsciiCasecmp(EntryType, "text/", 5) ||
-              dStrnAsciiCasecmp(DetectedType, "application/", 12)) {
+   } else if (dStrncasecmp(EntryType, "text/", 5) ||
+              dStrncasecmp(DetectedType, "application/", 12)) {
       /* Not an application sent as text */
       st = 0;
-   } else if (dStrnAsciiCasecmp(EntryType, "application/xhtml+xml", 21) &&
-              dStrnAsciiCasecmp(DetectedType, "text/html", 9)) {
+   } else if (dStrncasecmp(EntryType, "application/xhtml+xml", 21) &&
+              dStrncasecmp(DetectedType, "text/html", 9)) {
       /* XML version of HTML */
       st = 0;
    }
@@ -354,7 +352,7 @@ int a_Misc_content_type_check(const char *EntryType, const char *DetectedType)
    return st;
 }
 
-/**
+/*
  * Parse a geometry string.
  */
 int a_Misc_parse_geometry(char *str, int *x, int *y, int *w, int *h)
@@ -384,8 +382,8 @@ int a_Misc_parse_geometry(char *str, int *x, int *y, int *w, int *h)
    return ret;
 }
 
-/**
- * Parse dillorc's search_url string (`[<label> ]<url>`)
+/*
+ * Parse dillorc's search_url string ("[<label> ]<url>")
  * Return value: -1 on error, 0 on success (and label and urlstr pointers)
  */
 int a_Misc_parse_search_url(char *source, char **label, char **urlstr)
@@ -418,7 +416,7 @@ int a_Misc_parse_search_url(char *source, char **label, char **urlstr)
    return ret;
 }
 
-/**
+/*
  * Encodes string using base64 encoding.
  * Return value: new string or NULL if input string is empty.
  */
@@ -456,7 +454,7 @@ char *a_Misc_encode_base64(const char *in)
    return out;
 }
 
-/**
+/*
  * Load a local file into a dStr.
  * Return value: dStr on success, NULL on error.
  * TODO: a filesize threshold may be implemented.
@@ -468,7 +466,7 @@ Dstr *a_Misc_file2dstr(const char *filename)
    char buf[4096];
    Dstr *dstr = NULL;
 
-   if ((F_in = fopen(filename, "r"))) {
+   if ((F_in = fopen(filename, "rb"))) {
       dstr = dStr_sized_new(4096);
       while ((n = fread (buf, 1, 4096, F_in)) > 0) {
          dStr_append_l(dstr, buf, n);

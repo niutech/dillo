@@ -2,7 +2,6 @@
  * Key parser
  *
  * Copyright (C) 2009 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,6 +17,9 @@ typedef enum {
    KEYS_INVALID = -1,
    KEYS_NOP,   /* No operation bound */
    KEYS_OPEN,
+#ifdef ENABLE_PRINTER
+   KEYS_PRINT,
+#endif /* ENABLE_PRINTER */
    KEYS_NEW_WINDOW,
    KEYS_NEW_TAB,
    KEYS_LEFT_TAB,
@@ -25,9 +27,11 @@ typedef enum {
    KEYS_CLOSE_TAB,
    KEYS_FIRST_TAB,
    KEYS_LAST_TAB,
+   KEYS_COPY,
    KEYS_FIND,
    KEYS_WEBSEARCH,
    KEYS_BOOKMARKS,
+   KEYS_ADD_BOOKMARK,
    KEYS_RELOAD,
    KEYS_STOP,
    KEYS_SAVE,
@@ -38,20 +42,17 @@ typedef enum {
    KEYS_FORWARD,
    KEYS_GOTO,
    KEYS_HOME,
-   KEYS_VIEW_SOURCE,
+   KEYS_HELP,
    KEYS_SCREEN_UP,
    KEYS_SCREEN_DOWN,
-   KEYS_SCREEN_LEFT,
-   KEYS_SCREEN_RIGHT,
    KEYS_LINE_UP,
    KEYS_LINE_DOWN,
    KEYS_LEFT,
    KEYS_RIGHT,
    KEYS_TOP,
    KEYS_BOTTOM,
-   KEYS_ZOOM_IN,
-   KEYS_ZOOM_OUT,
-   KEYS_ZOOM_RESET
+   KEYS_PREFERENCES,
+   KEYS_VIEW_SOURCE
 } KeysCommand_t;
 
 class Keys {

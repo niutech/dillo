@@ -17,12 +17,10 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define PRINTF(fmt, ...)
-//#define PRINTF printf
+
 
 #include "container.hh"
 #include "misc.hh"
-#include "debug.hh"
 
 namespace lout {
 
@@ -104,8 +102,6 @@ void Collection::intoStringBuffer(misc::StringBuffer *sb)
 
 Vector::Vector(int initSize, bool ownerOfObjects)
 {
-   DBG_OBJ_CREATE ("lout::container::untyped::Vector");
-
    numAlloc = initSize == 0 ? 1 : initSize;
    this->ownerOfObjects = ownerOfObjects;
    numElements = 0;
@@ -116,13 +112,6 @@ Vector::~Vector()
 {
    clear();
    free(array);
-
-   DBG_OBJ_DELETE ();
-}
-
-int Vector::size ()
-{
-   return numElements;
 }
 
 void Vector::put(Object *newElement, int newPos)
@@ -140,10 +129,7 @@ void Vector::put(Object *newElement, int newPos)
    if (newPos >= numAlloc) {
       while (newPos >= numAlloc)
          numAlloc *= 2;
-      void *vp;
-      assert((vp = realloc(array, numAlloc * sizeof(Object*))));
-      if (!vp) exit(-2); // when NDEBUG is defined
-      array = (Object**)vp;
+      array = (Object**)realloc(array, numAlloc * sizeof(Object*));
    }
 
    // Insert NULL's into possible gap before new position.
@@ -174,13 +160,10 @@ void Vector::insert(Object *newElement, int pos)
    else {
       numElements++;
 
+      // Allocated memory has to be increased.
       if (numElements >= numAlloc) {
-         // Allocated memory has to be increased.
          numAlloc *= 2;
-         void *vp;
-         assert((vp = realloc(array, numAlloc * sizeof(Object*))));
-         if (!vp) exit(-2); // when NDEBUG is defined
-         array = (Object**)vp;
+         array = (Object**)realloc(array, numAlloc * sizeof(Object*));
       }
 
       for (int i = numElements - 1; i > pos; i--)
@@ -204,91 +187,18 @@ void Vector::remove(int pos)
 /**
  * Sort the elements in the vector. Assumes that all elements are Comparable's.
  */
-void Vector::sort(Comparator *comparator)
+void Vector::sort()
 {
-   Comparator::compareFunComparator = comparator;
-   qsort (array, numElements, sizeof(Object*), Comparator::compareFun);
+   qsort(array, numElements, sizeof(Object*), misc::Comparable::compareFun);
 }
+
 
 /**
- * \brief Use binary search to find an element in a sorted vector.
- *
- * If "mustExist" is true, only exact matches are found; otherwise, -1
- * is returned. If it is false, the position of the next greater
- * element is returned, or, if the key is the greatest element, the
- * size of the array. (This is the value which can be used for
- * insertion; see insertSortet()).
+ * \bug Not implemented.
  */
-int Vector::bsearch(Object *key, bool mustExist, int start, int end,
-                    Comparator *comparator)
-{
-   // The case !mustExist is not handled by bsearch(3), so here is a
-   // new implementation.
-
-   DBG_OBJ_MSGF ("container", 0,
-                 "<b>bsearch</b> (<i>key</i>, %s, %d, %d, <i>comparator</i>) "
-                 "[size is %d]",
-                 mustExist ? "true" : "false", start, end, size ());
-   DBG_OBJ_MSG_START ();
-
-   int result = -123; // Compiler happiness: GCC 4.7 does not handle this?
-
-   if (start > end) {
-      DBG_OBJ_MSG ("container", 1, "empty");
-      result = mustExist ? -1 : start;
-   } else {
-      int low = start, high = end;
-      bool found = false;
-
-      while (!found) {
-         int index = (low + high) / 2;
-         int c = comparator->compare (key, array[index]);
-         DBG_OBJ_MSGF ("container", 1,
-                       "searching within %d and %d; compare key with #%d => %d",
-                       low, high, index, c);
-         if (c == 0) {
-            found = true;
-            result = index;
-         } else {
-            if (low >= high) {
-               if (mustExist) {
-                  found = true;
-                  result = -1;
-               } else {
-                  found = true;
-                  result = c > 0 ? index + 1 : index;
-               }
-            }
-
-            if (c < 0)
-               high = index - 1;
-            else
-               low = index + 1;
-         }
-      }
-   }
-
-   DBG_OBJ_MSGF ("container", 1, "result = %d", result);
-   DBG_OBJ_MSG_END ();
-   return result;
-}
-
-Object *Vector::VectorIterator::getNext()
-{
-   if (index < vector->numElements - 1)
-      index++;
-
-   return index < vector->numElements ? vector->array[index] : NULL;
-}
-
-bool Vector::VectorIterator::hasNext()
-{
-   return index < vector->numElements - 1;
-}
-
 Collection0::AbstractIterator* Vector::createIterator()
 {
-   return new VectorIterator(this);
+   return NULL;
 }
 
 // ------------
@@ -305,32 +215,6 @@ List::List(bool ownerOfObjects)
 List::~List()
 {
    clear();
-}
-
-int List::size ()
-{
-   return numElements;
-}
-
-bool List::equals(Object *other)
-{
-   List *otherList = (List*)other;
-   Node *node1 = first, *node2 = otherList->first;
-   while (node1 != NULL && node2 != NULL ) {
-      if (!node1->object->equals (node2->object))
-         return false;
-      node1 = node1->next;
-      node2 = node2->next;
-   }
-   return node1 == NULL && node2 == NULL;
-}
-
-int List::hashValue()
-{
-   int h = 0;
-   for (Node *node = first; node; node = node->next)
-      h = h ^ node->object->hashValue ();
-   return h;
 }
 
 void List::clear()
@@ -362,28 +246,6 @@ void List::append(Object *element)
    numElements++;
 }
 
-bool List::insertBefore(object::Object *beforeThis, object::Object *neew)
-{
-   Node *beforeCur, *cur;
-
-   for (beforeCur = NULL, cur = first; cur; beforeCur = cur, cur = cur->next) {
-      if (cur->object == beforeThis) {
-         Node *newNode = new Node;
-         newNode->next = cur;
-         newNode->object = neew;
-         
-         if (beforeCur)
-            beforeCur->next = newNode;
-         else
-            first = newNode;
-
-         numElements++;
-         return true;
-      }
-   }
-
-   return false;
-}
 
 bool List::remove0(Object *element, bool compare, bool doNotDeleteAtAll)
 {
@@ -440,237 +302,38 @@ Collection0::AbstractIterator* List::createIterator()
 
 
 // ---------------
-//    HashSet
+//    HashTable
 // ---------------
 
-HashSet::HashSet(bool ownerOfObjects, int tableSize)
+HashTable::HashTable(bool ownerOfKeys, bool ownerOfValues, int tableSize)
 {
-   this->ownerOfObjects = ownerOfObjects;
+   this->ownerOfKeys = ownerOfKeys;
+   this->ownerOfValues = ownerOfValues;
    this->tableSize = tableSize;
 
    table = new Node*[tableSize];
    for (int i = 0; i < tableSize; i++)
       table[i] = NULL;
-
-   numElements = 0;
 }
 
-HashSet::~HashSet()
+HashTable::~HashTable()
 {
    for (int i = 0; i < tableSize; i++) {
       Node *n1 = table[i];
       while (n1) {
          Node *n2 = n1->next;
 
-         // It seems appropriate to call "clearNode(n1)" here instead
-         // of "delete n1->object", but since this is the destructor,
-         // the implementation of a sub class would not be called
-         // anymore. This is the reason why HashTable has an
-         // destructor.
-         if (ownerOfObjects) {
-            PRINTF ("- deleting object: %s\n", n1->object->toString());
-            delete n1->object;
-         }
-
+         if (ownerOfValues && n1->value)
+            delete n1->value;
+         if (ownerOfKeys)
+            delete n1->key;
          delete n1;
+
          n1 = n2;
       }
    }
 
    delete[] table;
-}
-
-int HashSet::size ()
-{
-   return numElements;
-}
-
-HashSet::Node *HashSet::createNode()
-{
-   return new Node;
-}
-
-void HashSet::clearNode(HashSet::Node *node)
-{
-   if (ownerOfObjects) {
-      PRINTF ("- deleting object: %s\n", node->object->toString());
-      delete node->object;
-   }
-}
-
-HashSet::Node *HashSet::findNode(Object *object) const
-{
-   int h = calcHashValue(object);
-   for (Node *node = table[h]; node; node = node->next) {
-      if (object->equals(node->object))
-         return node;
-   }
-
-   return NULL;
-}
-
-HashSet::Node *HashSet::insertNode(Object *object)
-{
-   // Look whether object is already contained.
-   Node *node = findNode(object);
-   if (node) {
-      clearNode(node);
-      numElements--;
-   } else {
-      int h = calcHashValue(object);
-      node = createNode ();
-      node->next = table[h];
-      table[h] = node;
-      numElements++;
-   }
-
-   node->object = object;
-   return node;
-}
-
-
-void HashSet::put(Object *object)
-{
-   insertNode (object);
-}
-
-bool HashSet::contains(Object *object) const
-{
-   int h = calcHashValue(object);
-   for (Node *n = table[h]; n; n = n->next) {
-      if (object->equals(n->object))
-         return true;
-   }
-
-   return false;
-}
-
-bool HashSet::remove(Object *object)
-{
-   int h = calcHashValue(object);
-   Node *last, *cur;
-
-   for (last = NULL, cur = table[h]; cur; last = cur, cur = cur->next) {
-      if (object->equals(cur->object)) {
-         if (last)
-            last->next = cur->next;
-         else
-            table[h] = cur->next;
-
-         clearNode (cur);
-         delete cur;
-         numElements--;
-
-         return true;
-      }
-   }
-
-   return false;
-
-   // TODO for HashTable: also remove value.
-}
-
-// For historical reasons: this method once existed under the name
-// "getKey" in HashTable. It could be used to get the real object from
-// the table, but it was dangerous, because a change of this object
-// would also change the hash value, and so confuse the table.
-
-/*Object *HashSet::getReference (Object *object)
-{
-   int h = calcHashValue(object);
-   for (Node *n = table[h]; n; n = n->next) {
-      if (object->equals(n->object))
-         return n->object;
-   }
-
-   return NULL;
-}*/
-
-HashSet::HashSetIterator::HashSetIterator(HashSet *set)
-{
-   this->set = set;
-   node = NULL;
-   pos = -1;
-   gotoNext();
-}
-
-void HashSet::HashSetIterator::gotoNext()
-{
-   if (node)
-      node = node->next;
-
-   while (node == NULL) {
-      if (pos >= set->tableSize - 1)
-         return;
-      pos++;
-      node = set->table[pos];
-   }
-}
-
-
-Object *HashSet::HashSetIterator::getNext()
-{
-   Object *result;
-   if (node)
-      result = node->object;
-   else
-      result = NULL;
-
-   gotoNext();
-   return result;
-}
-
-bool HashSet::HashSetIterator::hasNext()
-{
-   return node != NULL;
-}
-
-Collection0::AbstractIterator* HashSet::createIterator()
-{
-   return new HashSetIterator(this);
-}
-
-// ---------------
-//    HashTable
-// ---------------
-
-HashTable::HashTable(bool ownerOfKeys, bool ownerOfValues, int tableSize) :
-   HashSet (ownerOfKeys, tableSize)
-{
-   this->ownerOfValues = ownerOfValues;
-}
-
-HashTable::~HashTable()
-{
-   // See comment in the destructor of HashSet.
-   for (int i = 0; i < tableSize; i++) {
-      for (Node *n = table[i]; n; n = n->next) {
-         if (ownerOfValues) {
-            Object *value = ((KeyValuePair*)n)->value;
-            if (value) {
-               PRINTF ("- deleting value: %s\n", value->toString());
-               delete value;
-            }
-         }
-      }
-   }
-}
-
-HashSet::Node *HashTable::createNode()
-{
-   return new KeyValuePair;
-}
-
-void HashTable::clearNode(HashSet::Node *node)
-{
-   HashSet::clearNode (node);
-   if (ownerOfValues) {
-      Object *value = ((KeyValuePair*)node)->value;
-      if (value) {
-         PRINTF ("- deleting value: %s\n", value->toString());
-         delete value;
-      }
-   }
 }
 
 void HashTable::intoStringBuffer(misc::StringBuffer *sb)
@@ -682,16 +345,9 @@ void HashTable::intoStringBuffer(misc::StringBuffer *sb)
       for (Node *node = table[i]; node; node = node->next) {
          if (!first)
             sb->append(", ");
-         node->object->intoStringBuffer(sb);
-
+         node->key->intoStringBuffer(sb);
          sb->append(" => ");
-
-         Object *value = ((KeyValuePair*)node)->value;
-         if (value)
-             value->intoStringBuffer(sb);
-         else
-            sb->append ("null");
-
+         node->value->intoStringBuffer(sb);
          first = false;
       }
    }
@@ -701,17 +357,114 @@ void HashTable::intoStringBuffer(misc::StringBuffer *sb)
 
 void HashTable::put(Object *key, Object *value)
 {
-   KeyValuePair *node = (KeyValuePair*)insertNode(key);
-   node->value = value;
+   int h = calcHashValue(key);
+   Node *n = new Node;
+   n->key = key;
+   n->value = value;
+   n->next = table[h];
+   table[h] = n;
 }
 
-Object *HashTable::get(Object *key) const
+bool HashTable::contains(Object *key)
 {
-   Node *node = findNode(key);
+   int h = calcHashValue(key);
+   for (Node *n = table[h]; n; n = n->next) {
+      if (key->equals(n->key))
+         return true;
+   }
+
+   return false;
+}
+
+Object *HashTable::get(Object *key)
+{
+   int h = calcHashValue(key);
+   for (Node *n = table[h]; n; n = n->next) {
+      if (key->equals(n->key))
+         return n->value;
+   }
+
+   return NULL;
+}
+
+bool HashTable::remove(Object *key)
+{
+   int h = calcHashValue(key);
+   Node *last, *cur;
+
+   for (last = NULL, cur = table[h]; cur; last = cur, cur = cur->next) {
+      if (key->equals(cur->key)) {
+         if (last)
+            last->next = cur->next;
+         else
+            table[h] = cur->next;
+
+         if (ownerOfValues && cur->value)
+            delete cur->value;
+         if (ownerOfKeys)
+            delete cur->key;
+         delete cur;
+
+         return true;
+      }
+   }
+
+   return false;
+}
+
+Object *HashTable::getKey (Object *key)
+{
+   int h = calcHashValue(key);
+   for (Node *n = table[h]; n; n = n->next) {
+      if (key->equals(n->key))
+         return n->key;
+   }
+
+   return NULL;
+}
+
+HashTable::HashTableIterator::HashTableIterator(HashTable *table)
+{
+   this->table = table;
+   node = NULL;
+   pos = -1;
+   gotoNext();
+}
+
+void HashTable::HashTableIterator::gotoNext()
+{
    if (node)
-      return ((KeyValuePair*)node)->value;
+      node = node->next;
+
+   while (node == NULL) {
+      if (pos >= table->tableSize - 1)
+         return;
+      pos++;
+      node = table->table[pos];
+   }
+}
+
+
+Object *HashTable::HashTableIterator::getNext()
+{
+   Object *result;
+   if (node)
+      result = node->key;
    else
-      return NULL;
+      result = NULL;
+
+   gotoNext();
+   return result;
+}
+
+bool HashTable::HashTableIterator::hasNext()
+{
+   return node != NULL;
+}
+
+Collection0::AbstractIterator* HashTable::createIterator()
+{
+   return new HashTableIterator(this);
 }
 
 // -----------
@@ -729,11 +482,6 @@ Stack::~Stack()
 {
    while (top)
       pop ();
-}
-
-int Stack::size ()
-{
-   return numElements;
 }
 
 void Stack::push (object::Object *object)

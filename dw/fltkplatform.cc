@@ -19,9 +19,8 @@
 
 #include <stdio.h>
 
-#include "dlib/dlib.h"
 #include "../lout/msg.h"
-#include "../lout/debug.hh"
+#include "../lout/misc.hh"
 #include "fltkcore.hh"
 
 #include <FL/fl_draw.H>
@@ -33,6 +32,17 @@
 /*
  * Local data
  */
+
+#ifndef ENABLE_PRINTER
+/* Use of Fl_Text_Display links in a lot of printer code that we don't have
+ * any need for currently. This stub prevents that. */
+class FL_EXPORT Fl_Printer : public Fl_Paged_Device {
+public:
+   static const char *class_id;
+   Fl_Printer(void) {};
+};
+const char *Fl_Printer::class_id = "Fl_Printer";
+#endif /* ENABLE_PRINTER */
 
 /* Tooltips */
 static Fl_Menu_Window *tt_window = NULL;
@@ -116,13 +126,12 @@ FltkFont::FltkFont (core::style::FontAttrs *attrs)
    font = family->get (fa);
 
    fl_font(font, size);
-   // WORKAROUND: A bug with fl_width(uint_t) on non-xft X was present in
-   // 1.3.0 (STR #2688).
-   spaceWidth = misc::max(0, (int)fl_width(" ") + letterSpacing);
+   /* WORKAROUND: fl_width(uint_t) is not working on non-xft X.
+    * Reported to FLTK as STR #2688 */
+   spaceWidth = misc::max<int>(0, (int)fl_width(" ") + letterSpacing);
    int xx, xy, xw, xh;
    fl_text_extents("x", xx, xy, xw, xh);
    xHeight = xh;
-   zeroWidth = (int) fl_width("0");
    descent = fl_descent();
    ascent = fl_height() - descent;
 }
@@ -135,7 +144,7 @@ FltkFont::~FltkFont ()
 static void strstrip(char *big, const char *little)
 {
    if (strlen(big) >= strlen(little) &&
-      misc::AsciiStrcasecmp(big + strlen(big) - strlen(little), little) == 0)
+      strcasecmp(big + strlen(big) - strlen(little), little) == 0)
       *(big + strlen(big) - strlen(little)) = '\0';
 }
 
@@ -147,7 +156,7 @@ void FltkFont::initSystemFonts ()
    int k = Fl::set_fonts ("-*-iso10646-1");
    for (int i = 0; i < k; i++) {
       int t;
-      char *name = dStrdup (Fl::get_font_name ((Fl_Font) i, &t));
+      char *name = strdup (Fl::get_font_name ((Fl_Font) i, &t));
 
       // normalize font family names (strip off "bold", "italic")
       if (t & FL_ITALIC)
@@ -226,14 +235,10 @@ FltkColor::FltkColor (int color): Color (color)
 {
    this->color = color;
 
-   if (!(colors[SHADING_NORMAL] = shadeColor (color, SHADING_NORMAL) << 8))
-      colors[SHADING_NORMAL] = FL_BLACK;
-   if (!(colors[SHADING_INVERSE] = shadeColor (color, SHADING_INVERSE) << 8))
-      colors[SHADING_INVERSE] = FL_BLACK;
-   if (!(colors[SHADING_DARK] = shadeColor (color, SHADING_DARK) << 8))
-      colors[SHADING_DARK] = FL_BLACK;
-   if (!(colors[SHADING_LIGHT] = shadeColor (color, SHADING_LIGHT) << 8))
-      colors[SHADING_LIGHT] = FL_BLACK;
+   colors[SHADING_NORMAL] = shadeColor (color, SHADING_NORMAL) << 8;
+   colors[SHADING_INVERSE] = shadeColor (color, SHADING_INVERSE) << 8;
+   colors[SHADING_DARK] = shadeColor (color, SHADING_DARK) << 8;
+   colors[SHADING_LIGHT] = shadeColor (color, SHADING_LIGHT) << 8;
 }
 
 FltkColor::~FltkColor ()
@@ -299,7 +304,6 @@ void FltkTooltip::onEnter()
       Fl_Box *b = new Fl_Box(0,0,100,24);
       b->box(FL_BORDER_BOX);
       b->color(fl_color_cube(FL_NUM_RED-1, FL_NUM_GREEN-1, FL_NUM_BLUE-2));
-      b->labelcolor(FL_BLACK);
       b->labelfont(FL_HELVETICA);
       b->labelsize(14);
       b->align(FL_ALIGN_WRAP|FL_ALIGN_LEFT|FL_ALIGN_INSIDE);
@@ -413,21 +417,18 @@ FltkPlatform::FltkResourceFactory::createOptionMenuResource ()
 }
 
 core::ui::EntryResource *
-FltkPlatform::FltkResourceFactory::createEntryResource (int size,
+FltkPlatform::FltkResourceFactory::createEntryResource (int maxLength,
                                                         bool password,
-                                                        const char *label,
-                                                       const char *placeholder)
+                                                        const char *label)
 {
-   return new ui::FltkEntryResource (platform, size, password, label,
-                                     placeholder);
+   return new ui::FltkEntryResource (platform, maxLength, password, label);
 }
 
 core::ui::MultiLineTextResource *
 FltkPlatform::FltkResourceFactory::createMultiLineTextResource (int cols,
-                                                                int rows,
-                                                       const char *placeholder)
+                                                                int rows)
 {
-   return new ui::FltkMultiLineTextResource (platform, cols, rows,placeholder);
+   return new ui::FltkMultiLineTextResource (platform, cols, rows);
 }
 
 core::ui::CheckButtonResource *
@@ -451,8 +452,6 @@ core::ui::RadioButtonResource
 
 FltkPlatform::FltkPlatform ()
 {
-   DBG_OBJ_CREATE ("dw::fltk::FltkPlatform");
-
    layout = NULL;
    idleQueue = new container::typed::List <IdleFunc> (true);
    idleFuncRunning = false;
@@ -460,6 +459,8 @@ FltkPlatform::FltkPlatform ()
 
    view = NULL;
    resources = new container::typed::List <ui::FltkResource> (false);
+
+   clipboard = NULL;
 
    resourceFactory.setPlatform (this);
 }
@@ -470,14 +471,13 @@ FltkPlatform::~FltkPlatform ()
       Fl::remove_idle (generalStaticIdle, (void*)this);
    delete idleQueue;
    delete resources;
-
-   DBG_OBJ_DELETE ();
+   if (clipboard)
+     delete clipboard;
 }
 
 void FltkPlatform::setLayout (core::Layout *layout)
 {
    this->layout = layout;
-   DBG_OBJ_ASSOC_CHILD (layout);
 }
 
 
@@ -495,11 +495,11 @@ void FltkPlatform::attachView (core::View *view)
 }
 
 
-void FltkPlatform::detachView (core::View *view)
+void FltkPlatform::detachView  (core::View *view)
 {
    if (this->view != view)
       MSG_ERR("FltkPlatform::detachView: this->view: %p view: %p\n",
-              (void *) this->view, (void *) view);
+              this->view, view);
 
    for (container::typed::Iterator <ui::FltkResource> it =
            resources->iterator (); it.hasNext (); ) {
@@ -527,18 +527,14 @@ int FltkPlatform::textWidth (core::style::Font *font, const char *text,
          if ((cu = fl_toupper(c)) == c) {
             /* already uppercase, just draw the character */
             fl_font(ff->font, ff->size);
-            if (fl_nonspacing(cu) == 0) {
-               width += font->letterSpacing;
-               width += (int)fl_width(text + curr, next - curr);
-            }
+            width += font->letterSpacing;
+            width += (int)fl_width(text + curr, next - curr);
          } else {
             /* make utf8 string for converted char */
             nb = fl_utf8encode(cu, chbuf);
             fl_font(ff->font, sc_fontsize);
-            if (fl_nonspacing(cu) == 0) {
-               width += font->letterSpacing;
-               width += (int)fl_width(chbuf, nb);
-            }
+            width += font->letterSpacing;
+            width += (int)fl_width(chbuf, nb);
          }
       }
    } else {
@@ -550,45 +546,13 @@ int FltkPlatform::textWidth (core::style::Font *font, const char *text,
 
          while (next < len) {
             next = nextGlyph(text, curr);
-            c = fl_utf8decode(text + curr, text + next, &nb);
-            if (fl_nonspacing(c) == 0)
-               width += font->letterSpacing;
+            width += font->letterSpacing;
             curr = next;
          }
       }
    }
 
    return width;
-}
-
-char *FltkPlatform::textToUpper (const char *text, int len)
-{
-   char *newstr = NULL;
-
-   if (len > 0) {
-      int newlen;
-
-      newstr = (char*) malloc(3 * len + 1);
-      newlen = fl_utf_toupper((const unsigned char*)text, len, newstr);
-      assert(newlen <= 3 * len);
-      newstr[newlen] = '\0';
-   }
-   return newstr;
-}
-
-char *FltkPlatform::textToLower (const char *text, int len)
-{
-   char *newstr = NULL;
-
-   if (len > 0) {
-      int newlen;
-
-      newstr = (char*) malloc(3 * len + 1);
-      newlen = fl_utf_tolower((const unsigned char*)text, len, newstr);
-      assert(newlen <= 3 * len);
-      newstr[newlen] = '\0';
-   }
-   return newstr;
 }
 
 int FltkPlatform::nextGlyph (const char *text, int idx)
@@ -601,12 +565,17 @@ int FltkPlatform::prevGlyph (const char *text, int idx)
    return fl_utf8back (&text[idx - 1], text, &text[strlen (text)]) - text;
 }
 
+/*
+ * Workaround: if Fl::screen_dpi returns zero, fall back on
+ * 96 dpi (Windows' default DPI setting in small fonts mode).
+ */
+
 float FltkPlatform::dpiX ()
 {
    float horizontal, vertical;
 
    Fl::screen_dpi(horizontal, vertical);
-   return horizontal;
+   return (horizontal > 0.0) ? horizontal : 96.0;
 }
 
 float FltkPlatform::dpiY ()
@@ -614,7 +583,7 @@ float FltkPlatform::dpiY ()
    float horizontal, vertical;
 
    Fl::screen_dpi(horizontal, vertical);
-   return vertical;
+   return (vertical > 0.0) ? vertical : 96.0;
 }
 
 void FltkPlatform::generalStaticIdle (void *data)
@@ -702,13 +671,28 @@ core::style::Tooltip *FltkPlatform::createTooltip (const char *text)
 
 void FltkPlatform::copySelection(const char *text)
 {
+   if (clipboard)
+      delete clipboard;
+
+   // copySelection puts the text into the selection buffer when it's
+   // selected, but we don't have any way to get it back if we want to
+   // copy it to the clipboard later.  Note we can't just put it onto
+   // the clipboard here, since the user may not want to copy it at all.
+   clipboard = new object::String(text);
+
    Fl::copy(text, strlen(text), 0);
 }
 
-core::Imgbuf *FltkPlatform::createImgbuf (core::Imgbuf::Type type,
-                                          int width, int height, double gamma)
+void FltkPlatform::copySelectionToClipboard()
 {
-   return new FltkImgbuf (type, width, height, gamma);
+   if (clipboard)
+      Fl::copy(clipboard->chars(), strlen(clipboard->chars()), 1);
+}
+
+core::Imgbuf *FltkPlatform::createImgbuf (core::Imgbuf::Type type,
+                                          int width, int height)
+{
+   return new FltkImgbuf (type, width, height);
 }
 
 core::ui::ResourceFactory *FltkPlatform::getResourceFactory ()

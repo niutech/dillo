@@ -6,12 +6,12 @@
 
 #include "misc.hh"
 
-namespace lout {
-
 /**
  * \brief Here, some common classes (or interfaces) are defined, to standardize
  *    the access to other classes.
  */
+namespace lout {
+
 namespace object {
 
 /**
@@ -32,66 +32,6 @@ public:
    const char *toString();
    virtual size_t sizeOf();
 };
-
-/**
- * \brief Instances of a sub class of may be compared (less, greater).
- *
- * Used for sorting etc.
- */
-class Comparable: public Object
-{
-public:
-   /**
-    * \brief Compare two objects, this and other.
-    *
-    * Return a value < 0, when this is less than other, a value > 0,
-    * when this is greater than other, or 0, when this and other are
-    * equal.
-    *
-    * If c1.equals(c2) (as defined in Object), c1.compareTo(c2) must
-    * be 0, but, unlike you may expect, the reversed is not
-    * necessarily true. This method returns 0, if, according to the
-    * rules for sorting, there is no difference, but there may still
-    * be differences (not relevant for sorting), which "equals" will
-    * care about.
-    */
-   virtual int compareTo(Comparable *other) = 0;
-};
-
-/**
- * \brief Used for other orders as the one defined by Comparable.
- *
- * Compared objects must not necessarily be instances of Comparable.
- */
-class Comparator: public Object
-{
-public:
-   /**
-    * \brief Compare two objects o1 and o2.
-    *
-    * Return a value < 0, when o1 is less than o2, a value > 0, when o1
-    * is greater than o2, or 0, when o1 and o2 are equal.
-    *
-    * If o1.equals(o2) (as defined in Object), compare(o1, o2) must be
-    * 0, but, unlike you may expect, the reversed is not necessarily
-    * true. This method returns 0, if, according to the rules for
-    * sorting, there is no difference, but there may still be
-    * differences (not relevant for sorting), which "equals" will care
-    * about.
-    */
-   virtual int compare(Object *o1, Object *o2) = 0;
-
-   static Comparator *compareFunComparator;
-   static int compareFun(const void *p1, const void *p2);
-};
-
-class StandardComparator: public Comparator
-{
-public:
-   int compare(Object *o1, Object *o2);
-};
-
-extern StandardComparator standardComparator;
 
 /**
  * \brief An object::Object wrapper for void pointers.
@@ -123,7 +63,7 @@ public:
 /**
  * \brief An object::Object wrapper for int's.
  */
-class Integer: public Comparable
+class Integer: public Object, misc::Comparable
 {
    int value;
 
@@ -138,28 +78,11 @@ public:
 
 
 /**
- * \brief An object::Object wrapper for bool's.
- */
-class Boolean: public Comparable
-{
-   bool value;
-
-public:
-   Boolean(bool value) { this->value = value; }
-   bool equals(Object *other);
-   int hashValue();
-   void intoStringBuffer(misc::StringBuffer *sb);
-   int compareTo(Comparable *other);
-   inline bool getValue() { return value; }
-};
-
-
-/**
  * \brief An object::Object wrapper for constant strings (char*).
  *
  * As opposed to object::String, the char array is not copied.
  */
-class ConstString: public Comparable
+class ConstString: public Object, misc::Comparable
 {
 protected:
    const char *str;

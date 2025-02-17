@@ -9,8 +9,7 @@
  * (at your option) any later version.
  */
 
-/** @file
- * Support for a navigation stack */
+/* Support for a navigation stack */
 
 #include <stdio.h>
 #include <sys/stat.h>
@@ -28,10 +27,12 @@
  * For back and forward navigation, each bw keeps an url index,
  * and its scroll position.
  */
-typedef struct {
+typedef struct _nav_stack_item nav_stack_item;
+struct _nav_stack_item
+{
    int url_idx;
    int posx, posy;
-} nav_stack_item;
+};
 
 
 
@@ -231,7 +232,8 @@ static void Nav_open_url(BrowserWindow *bw, const DilloUrl *url,
 
       // a_Menu_pagemarks_new(bw);
 
-      Web = a_Web_new(bw, url, requester);
+      Web = a_Web_new(url, requester);
+      Web->bw = bw;
       Web->flags |= WEB_RootUrl;
       if ((ClientKey = a_Capi_open_url(Web, NULL, NULL)) != 0) {
          a_Bw_add_client(bw, ClientKey, 1);
@@ -354,7 +356,6 @@ void a_Nav_push(BrowserWindow *bw, const DilloUrl *url,
    a_Nav_cancel_expect(bw);
    a_Bw_expect(bw, url);
    Nav_open_url(bw, url, requester, 0);
-   a_UIcmd_set_location_text(bw, URL_STR(url));
 }
 
 /*
@@ -379,7 +380,7 @@ static void Nav_repush_callback(void *data)
 {
    _MSG(">>>> Nav_repush_callback <<<<\n");
    Nav_repush(data);
-   a_Timeout_remove();
+   a_Timeout_remove(Nav_repush_callback, data);
 }
 
 /*
@@ -413,7 +414,7 @@ static void Nav_redirection0_callback(void *data)
    a_Url_free(bw->meta_refresh_url);
    bw->meta_refresh_url = NULL;
    bw->meta_refresh_status = 0;
-   a_Timeout_remove();
+   a_Timeout_remove(Nav_redirection0_callback, data);
 }
 
 /*
@@ -481,16 +482,10 @@ static void Nav_reload_callback(void *data)
    a_Nav_cancel_expect(bw);
    if (a_Nav_stack_size(bw)) {
       h_url = a_History_get_url(NAV_TOP_UIDX(bw));
-      if (dStrAsciiCasecmp(URL_SCHEME(h_url), "dpi") == 0 &&
-          strncmp(URL_PATH(h_url), "/vsource/", 9) == 0) {
-         /* allow reload for view source dpi */
-         confirmed = 1;
-      } else if (URL_FLAGS(h_url) & URL_Post) {
+      if (URL_FLAGS(h_url) & URL_Post) {
          /* Attempt to repost data, let's confirm... */
-         choice = a_Dialog_choice("Dillo: Repost form?",
-                                  "Repost form data?",
-                                  "No", "Yes", "Cancel", NULL);
-         confirmed = (choice == 2);  /* "Yes" */
+         choice = a_Dialog_choice("Repost form data?", "&Yes", "&No", NULL);
+         confirmed = (choice == 0);  /* "Yes" */
       }
 
       if (confirmed) {
@@ -555,7 +550,7 @@ static void Nav_save_cb(int Op, CacheClient_t *Client)
       a_UIcmd_set_msg(Web->bw, "File saved (%d Bytes)", st.st_size);
    } else {
       if ((Bytes = Client->BufSize - Web->SavedBytes) > 0) {
-         Bytes = fwrite((char *) Client->Buf + Web->SavedBytes, 1, Bytes, Web->stream);
+         Bytes = fwrite(Client->Buf + Web->SavedBytes, 1, Bytes, Web->stream);
          Web->SavedBytes += Bytes;
       }
    }
@@ -567,7 +562,8 @@ static void Nav_save_cb(int Op, CacheClient_t *Client)
 void a_Nav_save_url(BrowserWindow *bw,
                     const DilloUrl *url, const char *filename)
 {
-   DilloWeb *Web = a_Web_new(bw, url, NULL);
+   DilloWeb *Web = a_Web_new(url, NULL);
+   Web->bw = bw;
    Web->filename = dStrdup(filename);
    Web->flags |= WEB_Download;
    /* TODO: keep track of this client */
@@ -588,20 +584,4 @@ int a_Nav_get_buf(const DilloUrl *Url, char **PBuf, int *BufSize)
 void a_Nav_unref_buf(const DilloUrl *Url)
 {
    a_Capi_unref_buf(Url);
-}
-
-/*
- * Wrapper for a_Capi_get_content_type().
- */
-const char *a_Nav_get_content_type(const DilloUrl *url)
-{
-   return a_Capi_get_content_type(url);
-}
-
-/*
- * Wrapper for a_Capi_set_vsource_url().
- */
-void a_Nav_set_vsource_url(const DilloUrl *Url)
-{
-   a_Capi_set_vsource_url(Url);
 }

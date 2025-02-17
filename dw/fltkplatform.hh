@@ -109,12 +109,11 @@ private:
       createListResource (core::ui::ListResource::SelectionMode selectionMode,
                           int rows);
       core::ui::OptionMenuResource *createOptionMenuResource ();
-      core::ui::EntryResource *createEntryResource (int size, bool password,
-                                                    const char *label,
-                                                    const char *placeholder);
+      core::ui::EntryResource *createEntryResource (int maxLength,
+                                                    bool password,
+                                                    const char *label);
       core::ui::MultiLineTextResource *createMultiLineTextResource (int cols,
-                                                                    int rows,
-                                                      const char *placeholder);
+                                                                    int rows);
       core::ui::CheckButtonResource *createCheckButtonResource (bool
                                                                 activated);
       core::ui::RadioButtonResource *
@@ -143,6 +142,8 @@ private:
    FltkView *view;
    lout::container::typed::List <ui::FltkResource> *resources;
 
+   lout::object::String *clipboard;
+
 public:
    FltkPlatform ();
    ~FltkPlatform ();
@@ -151,11 +152,9 @@ public:
 
    void attachView (core::View *view);
 
-   void detachView (core::View *view);
+   void detachView  (core::View *view);
 
    int textWidth (core::style::Font *font, const char *text, int len);
-   char *textToUpper (const char *text, int len);
-   char *textToLower (const char *text, int len);
    int nextGlyph (const char *text, int idx);
    int prevGlyph (const char *text, int idx);
    float dpiX ();
@@ -171,10 +170,10 @@ public:
    core::style::Tooltip *createTooltip (const char *text);
    void cancelTooltip();
 
-   core::Imgbuf *createImgbuf (core::Imgbuf::Type type, int width, int height,
-                               double gamma);
+   core::Imgbuf *createImgbuf (core::Imgbuf::Type type, int width, int height);
 
    void copySelection(const char *text);
+   void copySelectionToClipboard();
 
    core::ui::ResourceFactory *getResourceFactory ();
 

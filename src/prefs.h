@@ -2,7 +2,6 @@
  * Preferences
  *
  * Copyright (C) 2006-2009 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,17 +23,15 @@ extern "C" {
 #define PREFS_GEOMETRY_DEFAULT_XPOS  -9999
 #define PREFS_GEOMETRY_DEFAULT_YPOS  -9999
 
-/* FLTK has free color indices from 16 to 31 */
-#define PREFS_UI_BUTTON_HIGHLIGHT_COLOR 16
-#define PREFS_UI_TAB_ACTIVE_BG_COLOR 17
-#define PREFS_UI_TAB_ACTIVE_FG_COLOR 18
-#define PREFS_UI_TAB_BG_COLOR 19
-#define PREFS_UI_TAB_FG_COLOR 20
-
-/** Panel sizes. */
+/* Panel sizes */
 enum { P_tiny = 0, P_small, P_medium };
 
-typedef struct {
+enum {PREFS_FILTER_ALLOW_ALL,
+      PREFS_FILTER_SAME_DOMAIN};
+
+typedef struct _DilloPrefs DilloPrefs;
+
+struct _DilloPrefs {
    int width;
    int height;
    int xpos;
@@ -48,86 +45,58 @@ typedef struct {
    char *no_proxy;
    DilloUrl *start_page;
    DilloUrl *home;
-   DilloUrl *new_tab_page;
    bool_t allow_white_bg;
-   int32_t white_bg_replacement;
    int32_t bg_color;
-   int32_t ui_button_highlight_color;
-   int32_t ui_fg_color;
-   int32_t ui_main_bg_color;
-   int32_t ui_selection_color;
-   int32_t ui_tab_active_bg_color;
-   int32_t ui_tab_active_fg_color;
-   int32_t ui_tab_bg_color;
-   int32_t ui_tab_fg_color;
-   int32_t ui_tab_height;
-   int32_t ui_text_bg_color;
    bool_t contrast_visited_color;
    bool_t show_tooltip;
-   bool_t show_ui_tooltip;
-   char *theme;
    int panel_size;
    bool_t small_icons;
    bool_t limit_text_width;
-   bool_t adjust_min_width;
-   bool_t adjust_table_min_width;
+   bool_t w3c_plus_heuristics;
+   bool_t always_show_tabs;
    bool_t focus_new_tab;
    double font_factor;
-   double zoom_factor;
    int32_t font_max_size;
    int32_t font_min_size;
-   int32_t scroll_step;
-   int32_t scroll_page_overlap;
-   bool_t scrollbar_on_left;
-   bool_t scrollbar_page_mode;
    bool_t show_back;
    bool_t show_forw;
    bool_t show_home;
    bool_t show_reload;
-   bool_t show_save;
    bool_t show_stop;
    bool_t show_bookmarks;
    bool_t show_tools;
    bool_t show_filemenu;
-   bool_t show_clear_url;
    bool_t show_url;
    bool_t show_search;
    bool_t show_help;
    bool_t show_progress_box;
+   bool_t show_zoom;
    bool_t show_quit_dialog;
    bool_t fullwindow_start;
    bool_t load_images;
-   char *ignore_image_formats;
-   bool_t load_background_images;
    bool_t load_stylesheets;
    bool_t parse_embedded_css;
-   bool_t http_persistent_conns;
-   bool_t http_strict_transport_security;
-   bool_t http_force_https;
+   int filter_auto_requests;
    int32_t buffered_drawing;
    char *font_serif;
    char *font_sans_serif;
    char *font_cursive;
    char *font_fantasy;
    char *font_monospace;
+   bool_t font_default_serif;
    bool_t enterpress_forces_submit;
    bool_t middle_click_opens_new_tab;
    bool_t right_click_closes_tab;
-   bool_t scroll_switches_tabs;
-   bool_t scroll_switches_tabs_reverse;
-   bool_t search_url_idx;
+   int search_url_idx;
    Dlist *search_urls;
-   char *save_dir;
    bool_t show_msg;
    bool_t show_extra_warnings;
    bool_t middle_click_drags_page;
-   int penalty_hyphen, penalty_hyphen_2;
-   int penalty_em_dash_left, penalty_em_dash_right, penalty_em_dash_right_2;
-   int stretchability_factor;
-   Dlist *link_actions;
-} DilloPrefs;
+   char *date_format;
+   char *bookmarks_file;
+};
 
-/** Global Data */
+/* Global Data */
 extern DilloPrefs prefs;
 
 void a_Prefs_init(void);

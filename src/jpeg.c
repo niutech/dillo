@@ -2,7 +2,6 @@
  * File: jpeg.c
  *
  * Copyright (C) 2000-2007 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -10,8 +9,7 @@
  * (at your option) any later version.
  */
 
-/**
- * @file
+/*
  * The jpeg decoder for dillo. It is responsible for decoding JPEG data
  * and transferring it to the dicache. It uses libjpeg to do the actual
  * decoding.
@@ -48,22 +46,20 @@ typedef enum {
    DILLO_JPEG_ERROR
 } DilloJpegState;
 
-typedef struct DilloJpeg DilloJpeg;
-
 /* An implementation of a suspending source manager */
 
 typedef struct {
-   struct jpeg_source_mgr pub;  /**< public fields */
-   DilloJpeg *jpeg;             /**< a pointer back to the jpeg object */
+   struct jpeg_source_mgr pub;  /* public fields */
+   struct DilloJpeg *jpeg;      /* a pointer back to the jpeg object */
 } my_source_mgr;
 
 struct my_error_mgr {
-   struct jpeg_error_mgr pub;    /**< "public" fields */
-   jmp_buf setjmp_buffer;        /**< for return to caller */
+   struct jpeg_error_mgr pub;    /* "public" fields */
+   jmp_buf setjmp_buffer;        /* for return to caller */
 };
-typedef struct my_error_mgr *my_error_ptr;
+typedef struct my_error_mgr * my_error_ptr;
 
-struct DilloJpeg {
+typedef struct DilloJpeg {
    DilloImage *Image;
    DilloUrl *url;
    int version;
@@ -78,15 +74,16 @@ struct DilloJpeg {
 
    struct jpeg_decompress_struct cinfo;
    struct my_error_mgr jerr;
-};
+} DilloJpeg;
 
 /*
  * Forward declarations
  */
 static void Jpeg_write(DilloJpeg *jpeg, void *Buf, uint_t BufSize);
+METHODDEF(void) Jpeg_errorexit (j_common_ptr cinfo);
 
 
-/** Routine called by libjpeg when it detects an error. */
+/* this is the routine called by libjpeg when it detects an error. */
 METHODDEF(void) Jpeg_errorexit (j_common_ptr cinfo)
 {
    /* display message and return to setjmp buffer */
@@ -100,7 +97,7 @@ METHODDEF(void) Jpeg_errorexit (j_common_ptr cinfo)
    longjmp(myerr->setjmp_buffer, 1);
 }
 
-/**
+/*
  * Free the jpeg-decoding data structure.
  */
 static void Jpeg_free(DilloJpeg *jpeg)
@@ -110,7 +107,7 @@ static void Jpeg_free(DilloJpeg *jpeg)
    dFree(jpeg);
 }
 
-/**
+/*
  * Finish the decoding process
  */
 static void Jpeg_close(DilloJpeg *jpeg, CacheClient_t *Client)
@@ -120,9 +117,13 @@ static void Jpeg_close(DilloJpeg *jpeg, CacheClient_t *Client)
    Jpeg_free(jpeg);
 }
 
-static void init_source(struct jpeg_decompress_struct *p)
+/*
+ * The proper signature is:
+ *    static void init_source(j_decompress_ptr cinfo)
+ * (declaring it with no parameter avoids a compiler warning)
+ */
+static void init_source()
 {
-   (void) p; /* unused */
 }
 
 static boolean fill_input_buffer(j_decompress_ptr cinfo)
@@ -178,9 +179,8 @@ static void skip_input_data(j_decompress_ptr cinfo, long num_bytes)
  *    static void term_source(j_decompress_ptr cinfo)
  * (declaring it with no parameter avoids a compiler warning)
  */
-static void term_source(struct jpeg_decompress_struct *p)
+static void term_source()
 {
-   (void) p; /* unused */
 }
 
 void *a_Jpeg_new(DilloImage *Image, DilloUrl *url, int version)
@@ -233,22 +233,7 @@ void a_Jpeg_callback(int Op, void *data)
    }
 }
 
-const char *a_Jpeg_version(void)
-{
-#define QUOTE(x) #x
-#define STR(x) QUOTE(x)
-
-#if defined(LIBJPEG_TURBO_VERSION)
-   return STR(LIBJPEG_TURBO_VERSION);
-#else
-   return STR(JPEG_LIB_VERSION);
-#endif
-
-#undef STR
-#undef QUOTE
-}
-
-/**
+/*
  * Receive and process new chunks of JPEG image data
  */
 static void Jpeg_write(DilloJpeg *jpeg, void *Buf, uint_t BufSize)
@@ -287,8 +272,9 @@ static void Jpeg_write(DilloJpeg *jpeg, void *Buf, uint_t BufSize)
          } else if (jpeg->cinfo.num_components == 3) {
             type = DILLO_IMG_TYPE_RGB;
          } else {
+            MSG("4-component JPEG!\n");
             if (jpeg->cinfo.jpeg_color_space == JCS_YCCK)
-               MSG("YCCK JPEG. Are the colors wrong?\n");
+               MSG("YCCK. Are the colors wrong?\n");
             if (!jpeg->cinfo.saw_Adobe_marker)
                MSG("No adobe marker! Is the image shown in reverse video?\n");
             type = DILLO_IMG_TYPE_CMYK_INV;
@@ -312,12 +298,10 @@ static void Jpeg_write(DilloJpeg *jpeg, void *Buf, uint_t BufSize)
             return;
          }
 
-         /** \todo Gamma for JPEG? */
          a_Dicache_set_parms(jpeg->url, jpeg->version, jpeg->Image,
                              (uint_t)jpeg->cinfo.image_width,
                              (uint_t)jpeg->cinfo.image_height,
-                             type, 1 / 2.2);
-         jpeg->Image = NULL; /* safeguard: may be freed by its owner later */
+                             type);
 
          /* decompression step 4 (see libjpeg.doc) */
          jpeg->state = DILLO_JPEG_STARTING;
@@ -421,6 +405,5 @@ static void Jpeg_write(DilloJpeg *jpeg, void *Buf, uint_t BufSize)
 
 void *a_Jpeg_new() { return 0; }
 void a_Jpeg_callback() { return; }
-const char *a_Jpeg_version(void) { return 0; }
 
 #endif /* ENABLE_JPEG */

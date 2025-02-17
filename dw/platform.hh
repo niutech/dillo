@@ -44,7 +44,7 @@ public:
     * \brief This methods notifies the platform, that a view has been detached
     *    from the related layout.
     */
-   virtual void detachView (View *view) = 0;
+   virtual void detachView  (View *view) = 0;
 
    /*
     * -----------------------------------
@@ -56,16 +56,6 @@ public:
     * \brief Return the width of a text, with a given length and font.
     */
    virtual int textWidth (style::Font *font, const char *text, int len) = 0;
-
-   /**
-    * \brief Return the string resulting from transforming text to uppercase.
-    */
-   virtual char *textToUpper (const char *text, int len) = 0;
-
-   /**
-    * \brief Return the string resulting from transforming text to lowercase.
-    */
-   virtual char *textToLower (const char *text, int len) = 0;
 
    /**
     * \brief Return the index of the next glyph in string text.
@@ -121,11 +111,10 @@ public:
     * is defined, which holds more platform dependent data.
     *
     * Also, this method must fill the attributes "font" (when needed),
-    * "ascent", "descent", "spaceSidth", "zeroWidth" and "xHeight". If
-    * "tryEverything" is true, several methods should be used to use
-    * another font, when the requested font is not available. Passing
-    * false is typically done, if the caller wants to test different
-    * variations.
+    * "ascent", "descent", "spaceSidth" and "xHeight". If "tryEverything"
+    * is true, several methods should be used to use another font, when
+    * the requested font is not available. Passing false is typically done,
+    * if the caller wants to test different variations.
     */
    virtual style::Font *createFont (style::FontAttrs *attrs,
                                     bool tryEverything) = 0;
@@ -147,13 +136,12 @@ public:
     */
    virtual void cancelTooltip () = 0;
 
-   /**
-    * \brief Create a (platform specific) image buffer.
-    *
-    * "gamma" is the value by which the image data is gamma-encoded.
+   /*
+    * --------------------
+    *    Image Buffers
+    * --------------------
     */
-   virtual Imgbuf *createImgbuf (Imgbuf::Type type, int width, int height,
-                                 double gamma) = 0;
+   virtual Imgbuf *createImgbuf (Imgbuf::Type type, int width, int height) = 0;
 
    /**
     * \brief Copy selected text (0-terminated).
@@ -161,12 +149,17 @@ public:
    virtual void copySelection(const char *text) = 0;
 
    /**
+    * \brief Save copySelection text to clipboard.
+    */
+   virtual void copySelectionToClipboard() = 0;
+
+   /**
     * ...
     */
    virtual ui::ResourceFactory *getResourceFactory () = 0;
 };
 
-} // namespace core
 } // namespace dw
+} // namespace core
 
 #endif // __DW_PLATFORM_HH__

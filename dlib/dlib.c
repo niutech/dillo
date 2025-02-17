@@ -2,7 +2,6 @@
  * File: dlib.c
  *
  * Copyright (C) 2006-2007 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,9 +24,24 @@
 #include <unistd.h>
 #include <errno.h>
 #include <ctype.h>
-#include <time.h>
 
 #include "dlib.h"
+
+/* Additional platform-specific support code */
+#ifdef _WIN32
+#  include "dlib_win32.h"
+#endif
+
+#if defined(_WIN32)
+#  define DLIB_ROOT "C:\\"
+#  define DLIB_TEMP "C:\\WINDOWS\\TEMP"
+#elif defined(MSDOS)
+#  define DLIB_ROOT "C:\\"
+#  define DLIB_TEMP "C:\\TEMP"
+#else
+#  define DLIB_ROOT "/"
+#  define DLIB_TEMP "/tmp"
+#endif
 
 static bool_t dLib_show_msg = TRUE;
 
@@ -67,7 +81,8 @@ void *dMalloc0 (size_t size)
 
 void dFree (void *mem)
 {
-   free(mem);
+   if (mem)
+      free(mem);
 }
 
 /*
@@ -96,7 +111,7 @@ char *dStrndup(const char *s, size_t sz)
    return NULL;
 }
 
-/**
+/*
  * Concatenate a NULL-terminated list of strings
  */
 char *dStrconcat(const char *s1, ...)
@@ -116,7 +131,7 @@ char *dStrconcat(const char *s1, ...)
    return ns;
 }
 
-/**
+/*
  * Remove leading and trailing whitespace
  */
 char *dStrstrip(char *s)
@@ -134,16 +149,7 @@ char *dStrstrip(char *s)
    return s;
 }
 
-/**
- * Clear the contents of the string
- */
-void dStrshred(char *s)
-{
-   if (s)
-      memset(s, 0, strlen(s));
-}
-
-/**
+/*
  * Return a new string of length 'len' filled with 'c' characters
  */
 char *dStrnfill(size_t len, char c)
@@ -153,7 +159,7 @@ char *dStrnfill(size_t len, char c)
    return ret;
 }
 
-/**
+/*
  * strsep() implementation
  */
 char *dStrsep(char **orig, const char *delim)
@@ -174,21 +180,16 @@ char *dStrsep(char **orig, const char *delim)
 }
 
 /*
- * ASCII functions to avoid the case difficulties introduced by I/i in
- * Turkic locales.
- */
-
-/**
  * Case insensitive strstr
  */
-char *dStriAsciiStr(const char *haystack, const char *needle)
+char *dStristr(const char *haystack, const char *needle)
 {
    int i, j;
    char *ret = NULL;
 
    if (haystack && needle) {
       for (i = 0, j = 0; haystack[i] && needle[j]; ++i)
-         if (D_ASCII_TOLOWER(haystack[i]) == D_ASCII_TOLOWER(needle[j])) {
+         if (tolower(haystack[i]) == tolower(needle[j])) {
             ++j;
          } else if (j) {
             i -= j;
@@ -200,35 +201,12 @@ char *dStriAsciiStr(const char *haystack, const char *needle)
    return ret;
 }
 
-int dStrAsciiCasecmp(const char *s1, const char *s2)
-{
-   int ret = 0;
-
-   while ((*s1 || *s2) &&
-          !(ret = D_ASCII_TOLOWER(*s1) - D_ASCII_TOLOWER(*s2))) {
-      s1++;
-      s2++;
-   }
-   return ret;
-}
-
-int dStrnAsciiCasecmp(const char *s1, const char *s2, size_t n)
-{
-   int ret = 0;
-
-   while (n-- && (*s1 || *s2) &&
-          !(ret = D_ASCII_TOLOWER(*s1) - D_ASCII_TOLOWER(*s2))) {
-      s1++;
-      s2++;
-   }
-   return ret;
-}
 
 /*
  *- dStr ----------------------------------------------------------------------
  */
 
-/**
+/*
  * Private allocator
  */
 static void dStr_resize(Dstr *ds, int n_sz, int keep)
@@ -247,7 +225,7 @@ static void dStr_resize(Dstr *ds, int n_sz, int keep)
    }
 }
 
-/**
+/*
  * Create a new string with a given size.
  * Initialized to ""
  */
@@ -263,15 +241,15 @@ Dstr *dStr_sized_new (int sz)
    return ds;
 }
 
-/**
- * Return memory if there's too much allocated.
+/*
+ * Return memory if there's too much allocated
  */
 void dStr_fit (Dstr *ds)
 {
    dStr_resize(ds, ds->len + 1, 1);
 }
 
-/**
+/*
  * Insert a C string, at a given position, into a Dstr (providing length).
  * Note: It also works with embedded nil characters.
  */
@@ -292,8 +270,8 @@ void dStr_insert_l (Dstr *ds, int pos_0, const char *s, int l)
    }
 }
 
-/**
- * Insert a C string, at a given position, into a Dstr.
+/*
+ * Insert a C string, at a given position, into a Dstr
  */
 void dStr_insert (Dstr *ds, int pos_0, const char *s)
 {
@@ -301,7 +279,7 @@ void dStr_insert (Dstr *ds, int pos_0, const char *s)
       dStr_insert_l(ds, pos_0, s, strlen(s));
 }
 
-/**
+/*
  * Append a C string to a Dstr (providing length).
  * Note: It also works with embedded nil characters.
  */
@@ -310,7 +288,7 @@ void dStr_append_l (Dstr *ds, const char *s, int l)
    dStr_insert_l(ds, ds->len, s, l);
 }
 
-/**
+/*
  * Append a C string to a Dstr.
  */
 void dStr_append (Dstr *ds, const char *s)
@@ -318,7 +296,7 @@ void dStr_append (Dstr *ds, const char *s)
    dStr_append_l(ds, s, strlen(s));
 }
 
-/**
+/*
  * Create a new string.
  * Initialized to 's' or empty if 's == NULL'
  */
@@ -330,7 +308,7 @@ Dstr *dStr_new (const char *s)
    return ds;
 }
 
-/**
+/*
  * Free a dillo string.
  * if 'all' free everything, else free the structure only.
  */
@@ -343,7 +321,7 @@ void dStr_free (Dstr *ds, int all)
    }
 }
 
-/**
+/*
  * Append one character.
  */
 void dStr_append_c (Dstr *ds, int c)
@@ -362,7 +340,7 @@ void dStr_append_c (Dstr *ds, int c)
    }
 }
 
-/**
+/*
  * Truncate a Dstr to be 'len' bytes long.
  */
 void dStr_truncate (Dstr *ds, int len)
@@ -373,16 +351,7 @@ void dStr_truncate (Dstr *ds, int len)
    }
 }
 
-/**
- * Clear a Dstr.
- */
-void dStr_shred (Dstr *ds)
-{
-   if (ds && ds->sz > 0)
-      memset(ds->str, '\0', ds->sz);
-}
-
-/**
+/*
  * Erase a substring.
  */
 void dStr_erase (Dstr *ds, int pos_0, int len)
@@ -394,7 +363,7 @@ void dStr_erase (Dstr *ds, int pos_0, int len)
    }
 }
 
-/**
+/*
  * vsprintf-like function that appends.
  * Used by: dStr_vsprintf(), dStr_sprintf() and dStr_sprintfa().
  */
@@ -408,17 +377,6 @@ void dStr_vsprintfa (Dstr *ds, const char *format, va_list argp)
          va_copy(argp2, argp);
          n = vsnprintf(ds->str + ds->len, ds->sz - ds->len, format, argp2);
          va_end(argp2);
-#if defined(__sgi)
-         /* IRIX does not conform to C99; if the entire argument did not fit
-          * into the buffer, n = buffer space used (minus 1 for terminator)
-          */
-         if (n > -1 && n + 1 < ds->sz - ds->len) {
-            ds->len += n;      /* Success! */
-            break;
-         } else {
-            n_sz = ds->sz * 2;
-         }
-#else
          if (n > -1 && n < ds->sz - ds->len) {
             ds->len += n;      /* Success! */
             break;
@@ -427,13 +385,12 @@ void dStr_vsprintfa (Dstr *ds, const char *format, va_list argp)
          } else {              /* old glibc */
             n_sz = ds->sz * 2;
          }
-#endif
          dStr_resize(ds, n_sz, (ds->len > 0) ? 1 : 0);
       }
    }
 }
 
-/**
+/*
  * vsprintf-like function.
  */
 void dStr_vsprintf (Dstr *ds, const char *format, va_list argp)
@@ -444,7 +401,7 @@ void dStr_vsprintf (Dstr *ds, const char *format, va_list argp)
    }
 }
 
-/**
+/*
  * Printf-like function
  */
 void dStr_sprintf (Dstr *ds, const char *format, ...)
@@ -458,7 +415,7 @@ void dStr_sprintf (Dstr *ds, const char *format, ...)
    }
 }
 
-/**
+/*
  * Printf-like function that appends.
  */
 void dStr_sprintfa (Dstr *ds, const char *format, ...)
@@ -472,7 +429,7 @@ void dStr_sprintfa (Dstr *ds, const char *format, ...)
    }
 }
 
-/**
+/*
  * Compare two dStrs.
  */
 int dStr_cmp(Dstr *ds1, Dstr *ds2)
@@ -484,7 +441,7 @@ int dStr_cmp(Dstr *ds1, Dstr *ds2)
    return ret;
 }
 
-/**
+/*
  * Return a pointer to the first occurrence of needle in haystack.
  */
 char *dStr_memmem(Dstr *haystack, Dstr *needle)
@@ -504,7 +461,7 @@ char *dStr_memmem(Dstr *haystack, Dstr *needle)
    return NULL;
 }
 
-/**
+/*
  * Return a printable representation of the provided Dstr, limited to a length
  * of roughly maxlen.
  *
@@ -542,7 +499,7 @@ const char *dStr_printable(Dstr *in, int maxlen)
  *- dList ---------------------------------------------------------------------
  */
 
-/**
+/*
  * Create a new empty list
  */
 Dlist *dList_new(int size)
@@ -558,7 +515,7 @@ Dlist *dList_new(int size)
    return l;
 }
 
-/**
+/*
  * Free a list (not its elements)
  */
 void dList_free (Dlist *lp)
@@ -570,7 +527,7 @@ void dList_free (Dlist *lp)
    dFree(lp);
 }
 
-/**
+/*
  * Insert an element at a given position [0 based]
  */
 void dList_insert_pos (Dlist *lp, void *data, int pos0)
@@ -591,7 +548,7 @@ void dList_insert_pos (Dlist *lp, void *data, int pos0)
    lp->list[pos0] = data;
 }
 
-/**
+/*
  * Append a data item to the list
  */
 void dList_append (Dlist *lp, void *data)
@@ -599,7 +556,7 @@ void dList_append (Dlist *lp, void *data)
    dList_insert_pos(lp, data, lp->len);
 }
 
-/**
+/*
  * Prepend a data item to the list
  */
 void dList_prepend (Dlist *lp, void *data)
@@ -607,7 +564,7 @@ void dList_prepend (Dlist *lp, void *data)
    dList_insert_pos(lp, data, 0);
 }
 
-/**
+/*
  * For completing the ADT.
  */
 int dList_length (Dlist *lp)
@@ -617,7 +574,7 @@ int dList_length (Dlist *lp)
    return lp->len;
 }
 
-/**
+/*
  * Remove a data item without preserving order.
  */
 void dList_remove_fast (Dlist *lp, const void *data)
@@ -655,7 +612,7 @@ void dList_remove (Dlist *lp, const void *data)
    }
 }
 
-/**
+/*
  * Return the nth data item,
  * NULL when not found or 'n0' is out of range
  */
@@ -666,7 +623,7 @@ void *dList_nth_data (Dlist *lp, int n0)
    return lp->list[n0];
 }
 
-/**
+/*
  * Return the found data item, or NULL if not present.
  */
 void *dList_find (Dlist *lp, const void *data)
@@ -675,7 +632,7 @@ void *dList_find (Dlist *lp, const void *data)
    return (i >= 0) ? lp->list[i] : NULL;
 }
 
-/**
+/*
  * Search a data item.
  * Return value: its index if found, -1 if not present.
  * (this is useful for a list of integers, for finding number zero).
@@ -696,7 +653,7 @@ int dList_find_idx (Dlist *lp, const void *data)
    return ret;
 }
 
-/**
+/*
  * Search a data item using a custom function.
  * func() is given the list item and the user data as parameters.
  * Return: data item when found, NULL otherwise.
@@ -718,7 +675,7 @@ void *dList_find_custom (Dlist *lp, const void *data, dCompareFunc func)
    return ret;
 }
 
-/**
+/*
  * QuickSort implementation.
  * This allows for a simple compare function for all the ADT.
  */
@@ -752,7 +709,7 @@ static void QuickSort(void **left, void **right, dCompareFunc compare)
      QuickSort(p, right, compare);
 }
 
-/**
+/*
  * Sort the list using a custom function
  */
 void dList_sort (Dlist *lp, dCompareFunc func)
@@ -762,7 +719,7 @@ void dList_sort (Dlist *lp, dCompareFunc func)
    }
 }
 
-/**
+/*
  * Insert an element into a sorted list.
  * The comparison function receives two list elements.
  */
@@ -788,7 +745,7 @@ void dList_insert_sorted (Dlist *lp, void *data, dCompareFunc func)
    }
 }
 
-/**
+/*
  * Search a sorted list.
  * Return the found data item, or NULL if not present.
  * func() is given the list item and the user data as parameters.
@@ -822,7 +779,7 @@ void *dList_find_sorted (Dlist *lp, const void *data, dCompareFunc func)
  *- Parse function ------------------------------------------------------------
  */
 
-/**
+/*
  * Take a dillo rc line and return 'name' and 'value' pointers to it.
  * Notes:
  *    - line is modified!
@@ -882,47 +839,128 @@ void dLib_show_messages(bool_t show)
  *- Misc utility functions ----------------------------------------------------
  */
 
-/**
- * Return the current working directory in a new string
+/*
+ * Return the current working directory in a static string (don't free)
  */
-char *dGetcwd (void)
+char *dGetcwd ()
 {
-  size_t size = 128;
+  static char *buffer = NULL;
 
-  while (1) {
-      char *buffer = dNew(char, size);
-      if (getcwd (buffer, size) == buffer)
-        return buffer;
-      dFree (buffer);
-      if (errno != ERANGE)
-        return 0;
-      size *= 2;
-  }
+   if (!buffer) {
+      size_t size = 128;
+      while (1) {
+         buffer = dNew0(char, size);
+         if (getcwd (buffer, size) == buffer)
+            break;  // success
+         dFree (buffer);
+         if (errno != ERANGE)
+            break;  // returns NULL
+         size *= 2;
+      }
+   }
+   return buffer;
 }
 
-/**
+/*
  * Return the home directory in a static string (don't free)
  */
-char *dGethomedir (void)
+char *dGethomedir ()
 {
    static char *homedir = NULL;
 
    if (!homedir) {
       if (getenv("HOME")) {
          homedir = dStrdup(getenv("HOME"));
-
+#ifdef MSDOS
+      } else if (getenv("DPLUS")) {
+         homedir = dStrdup(getenv("DPLUS"));  /* set in DPLUS.BAT */
+#endif /* MSDOS */
+#ifdef _WIN32
+      } else if (getenv("USERPROFILE")) {
+         homedir = dStrdup(getenv("USERPROFILE"));
       } else if (getenv("HOMEDRIVE") && getenv("HOMEPATH")) {
          homedir = dStrconcat(getenv("HOMEDRIVE"), getenv("HOMEPATH"), NULL);
+      } else if (getenv("windir")) {
+         homedir = dStrdup(getenv("windir"));  /* last resort for Win9x */
+#endif /* _WIN32 */
       } else {
-         DLIB_MSG("dGethomedir: $HOME not set, using '/'.\n");
-         homedir = dStrdup("/");
+         DLIB_MSG("dGethomedir: $HOME not set, using '" DLIB_ROOT "'.\n");
+         homedir = dStrdup(DLIB_ROOT);
       }
    }
    return homedir;
 }
 
-/**
+/*
+ * Return the ~/.dplus directory in a static string (don't free)
+ */
+char *dGetprofdir ()
+{
+   static char *profdir = NULL;
+
+   if (!profdir) {
+#if defined(_WIN32)
+      /* If we're running as a portable application, this will return (and
+       * possibly create) a profile dir under the current working directory. */
+      if (!(profdir = dGetportableappdir())) {
+         /* Try to locate the Application Data folder. On Windows 2000 and
+          * newer this is %APPDATA%; older versions require more guesswork. */
+         if (getenv("APPDATA"))
+            profdir = dStrconcat(getenv("APPDATA"), "/DPlus", NULL);
+         else if (getenv("USERPROFILE"))
+            profdir = dStrconcat(getenv("USERPROFILE"),
+                                 "/Application Data/DPlus", NULL);
+         else if (getenv("HOMEDRIVE") && getenv("HOMEPATH"))
+            profdir = dStrconcat(getenv("HOMEDRIVE"), getenv("HOMEPATH"),
+                                 "/Application Data/DPlus", NULL);
+         else if (getenv("windir"))
+            profdir = dStrconcat(getenv("windir"),
+                                 "/Application Data/DPlus", NULL);
+         else /* this should never happen */
+            profdir = dStrconcat(dGethomedir(), "/.dplus", NULL);
+      }
+#elif defined(MSDOS)
+      /* Use an 8.3-safe directory name on DOS. */
+      profdir = dStrconcat(getenv("DPLUS"), "/PROFILE", NULL);
+#else
+      /* Unix and others use the conventional ~/.dplus location. */
+      profdir = dStrconcat(dGethomedir(), "/.dplus", NULL);
+#endif
+   }
+   return profdir;
+}
+
+/*
+ * Return the temporary directory in a static string (don't free)
+ */
+char *dGettempdir ()
+{
+   static char *tempdir = NULL;
+
+   if (!tempdir) {
+      if (getenv("TEMP")) {
+	 tempdir = dStrdup(getenv("TEMP"));
+      } else if (getenv("TMP")) {
+	 tempdir = dStrdup(getenv("TMP"));
+#ifdef MSDOS
+      } else if (getenv("DPLUS")) {
+         tempdir = dStrdup(getenv("DPLUS"));
+#endif /* MSDOS */
+#ifdef _WIN32
+      } else if (getenv("windir")) {
+	 tempdir = dStrconcat(getenv("windir"), "\\TEMP", NULL);
+#endif /* _WIN32 */
+      } else {
+	 DLIB_MSG("dGettempdir: $TEMP not set, using '" DLIB_TEMP "'.\n");
+	 tempdir = dStrdup(DLIB_TEMP);
+      }
+   }
+   return tempdir;
+}
+
+/*
  * Get a line from a FILE stream.
+ * It handles backslash as line-continues character.
  * Return value: read line on success, NULL on EOF.
  */
 char *dGetline (FILE *stream)
@@ -945,36 +983,3 @@ char *dGetline (FILE *stream)
    return line;
 }
 
-/**
- * Close a FD handling EINTR.
- */
-int dClose(int fd)
-{
-   int st;
-
-   do
-      st = close(fd);
-   while (st == -1 && errno == EINTR);
-   return st;
-}
-
-/**
- * Portable usleep() function.
- *
- * The usleep() function is deprecated in POSIX.1-2001 and removed in
- * POSIX.1-2008, see usleep(3).
- */
-int dUsleep(unsigned long usec)
-{
-	struct timespec ts;
-	int res;
-
-	ts.tv_sec = usec / 1000000UL;
-	ts.tv_nsec = (usec % 1000000UL) * 1000UL;
-
-	do {
-		res = nanosleep(&ts, &ts);
-	} while (res && errno == EINTR);
-
-	return res;
-}

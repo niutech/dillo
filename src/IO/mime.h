@@ -23,8 +23,8 @@ extern "C" {
 
 typedef void* (*Viewer_t) (const char*, void*, CA_Callback_t*, void**);
 
-/**
- * Function prototypes defined elsewhere.
+/*
+ * Function prototypes defined elsewhere
  */
 void *a_Html_text (const char *Type,void *web, CA_Callback_t *Call,
                        void **Data);
@@ -32,20 +32,17 @@ void *a_Plain_text(const char *Type,void *web, CA_Callback_t *Call,
                        void **Data);
 void *a_Dicache_png_image (const char *Type,void *web, CA_Callback_t *Call,
                            void **Data);
-void *a_Dicache_webp_image (const char *Type,void *web, CA_Callback_t *Call,
-                           void **Data);
 void *a_Dicache_gif_image(const char *Type, void *Ptr, CA_Callback_t *Call,
                           void **Data);
 void *a_Dicache_jpeg_image(const char *Type, void *Ptr, CA_Callback_t *Call,
                            void **Data);
-void *a_Dicache_svg_image(const char *Type, void *Ptr, CA_Callback_t *Call,
-                           void **Data);
 
-/**
+/*
  * Functions defined inside Mime module
  */
 void a_Mime_init(void);
-Viewer_t a_Mime_get_viewer(const char *content_type);
+void *a_Mime_set_viewer(const char *content_type, void *Ptr,
+                        CA_Callback_t *Call, void **Data);
 
 #ifdef __cplusplus
 }

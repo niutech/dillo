@@ -17,38 +17,34 @@
 #include "../dlib/dlib.h"
 #include "paths.hh"
 
+#include "import.h"
+
 /*
- * Local data
- */
-
-// Dillo works from an unmounted directory (/tmp)
-static char* oldWorkingDir = NULL;
-
-/**
- * Changes current working directory to /tmp and creates ~/.dillo
+ * Changes current working directory to /tmp and creates ~/.dplus
  * if not exists.
  */
 void Paths::init(void)
 {
-   char *path;
+   char *path, *dillo_path;
    struct stat st;
-   int rc = 0;
 
-   dFree(oldWorkingDir);
-   oldWorkingDir = dGetcwd();
-   rc = chdir("/tmp");
-   if (rc == -1) {
-      MSG("paths: Error changing directory to /tmp: %s\n",
-          dStrerror(errno));
-   }
-
-   path = dStrconcat(dGethomedir(), "/.dillo", NULL);
+   path = dStrdup(dGetprofdir());
+   dillo_path = dStrconcat(dGethomedir(), "/.dillo", NULL);
    if (stat(path, &st) == -1) {
       if (errno == ENOENT) {
-         MSG("paths: Creating directory '%s/'\n", path);
-         if (mkdir(path, 0700) < 0) {
-            MSG("paths: Error creating directory %s: %s\n",
+         MSG("paths: creating directory %s.\n", path);
+         if (dMkdir(path, 0700) < 0) {
+            MSG("paths: error creating directory %s: %s\n",
                 path, dStrerror(errno));
+         } else {
+#ifndef MSDOS
+            /* Attempt to import preferences, bookmarks, etc. from Dillo */
+            if (stat(dillo_path, &st) != -1) {
+               MSG("paths: attempting to import Dillo profile from %s.\n",
+                   dillo_path);
+               a_Import_dillo_profile(dillo_path);
+            }
+#endif /* MSDOS */
          }
       } else {
          MSG("Dillo: error reading %s: %s\n", path, dStrerror(errno));
@@ -56,43 +52,56 @@ void Paths::init(void)
    }
 
    dFree(path);
+   dFree(dillo_path);
 }
 
-/**
- * Return the initial current working directory in a string.
- */
-char *Paths::getOldWorkingDir(void)
-{
-   return oldWorkingDir;
-}
-
-/**
+/*
  * Free memory
  */
 void Paths::free(void)
 {
-   dFree(oldWorkingDir);
 }
 
-/**
+/*
  * Examines the path for "rcFile" and assign its file pointer to "fp".
  */
 FILE *Paths::getPrefsFP(const char *rcFile)
 {
    FILE *fp;
-   char *path = dStrconcat(dGethomedir(), "/.dillo/", rcFile, NULL);
+   char *path = dStrconcat(dGetprofdir(), "/", rcFile, NULL);
 
    if (!(fp = fopen(path, "r"))) {
-      MSG("paths: Cannot open file '%s': %s\n", path, dStrerror(errno));
+      MSG("paths: Cannot open file '%s'\n", path);
 
+#if defined(_WIN32) || defined(MSDOS)
+      /* Windows and DOS don't fall back on a system configuration file */
+      MSG("paths: Using internal defaults...\n");
+#else
       char *path2 = dStrconcat(DILLO_SYSCONF, rcFile, NULL);
       if (!(fp = fopen(path2, "r"))) {
-         MSG("paths: Cannot open file '%s': %s\n", path2, dStrerror(errno));
+         MSG("paths: Cannot open file '%s'\n",path2);
          MSG("paths: Using internal defaults...\n");
       } else {
          MSG("paths: Using %s\n", path2);
       }
       dFree(path2);
+#endif
+   }
+
+   dFree(path);
+   return fp;
+}
+
+/*
+ * Return writable file pointer to user's dillorc.
+ */
+FILE *Paths::getWriteFP(const char *rcFile)
+{
+   FILE *fp;
+   char *path = dStrconcat(dGetprofdir(), "/", rcFile, NULL);
+
+   if (!(fp = fopen(path, "w"))) {
+      MSG("paths: Cannot open file '%s' for writing\n", path);
    }
 
    dFree(path);

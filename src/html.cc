@@ -2,7 +2,6 @@
  * File: html.cc
  *
  * Copyright (C) 2005-2007 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -10,14 +9,14 @@
  * (at your option) any later version.
  */
 
-/** @file
+/*
  * Dillo HTML parsing routines
  */
 
 /*-----------------------------------------------------------------------------
  * Includes
  *---------------------------------------------------------------------------*/
-#include <ctype.h>      /* for isspace */
+#include <ctype.h>      /* for isspace and tolower */
 #include <string.h>     /* for memcpy and memmove */
 #include <stdlib.h>
 #include <stdio.h>      /* for sprintf */
@@ -27,7 +26,6 @@
 #include "msg.h"
 #include "binaryconst.h"
 #include "colors.h"
-#include "html_charrefs.h"
 #include "utf8.hh"
 
 #include "misc.h"
@@ -41,11 +39,11 @@
 #include "form.hh"
 #include "table.hh"
 
-#include "dw/textblock.hh"
-#include "dw/bullet.hh"
-#include "dw/listitem.hh"
-#include "dw/image.hh"
-#include "dw/ruler.hh"
+#include "../dw/textblock.hh"
+#include "../dw/bullet.hh"
+#include "../dw/listitem.hh"
+#include "../dw/image.hh"
+#include "../dw/ruler.hh"
 
 /*-----------------------------------------------------------------------------
  * Defines
@@ -71,7 +69,7 @@ using namespace dw::core::style;
  *---------------------------------------------------------------------------*/
 class DilloHtml;
 typedef void (*TagOpenFunct) (DilloHtml *html, const char *tag, int tagsize);
-typedef void (*TagCloseFunct) (DilloHtml *html);
+typedef void (*TagCloseFunct) (DilloHtml *html, int TagIdx);
 
 typedef enum {
    SEEK_ATTR_START,
@@ -100,46 +98,30 @@ void *a_Html_text(const char *type, void *P, CA_Callback_t *Call,void **Data);
 /*-----------------------------------------------------------------------------
  * Forward declarations
  *---------------------------------------------------------------------------*/
+static const char *Html_get_attr2(DilloHtml *html,
+                                  const char *tag,
+                                  int tagsize,
+                                  const char *attrname,
+                                  int tag_parsing_flags);
 static int Html_write_raw(DilloHtml *html, char *buf, int bufsize, int Eof);
 static bool Html_load_image(BrowserWindow *bw, DilloUrl *url,
                             const DilloUrl *requester, DilloImage *image);
 static void Html_callback(int Op, CacheClient_t *Client);
 static void Html_tag_cleanup_at_close(DilloHtml *html, int TagIdx);
-int a_Html_tag_index(const char *tag);
 
 /*-----------------------------------------------------------------------------
  * Local Data
  *---------------------------------------------------------------------------*/
-/** Parsing table structure */
+/* Parsing table structure */
 typedef struct {
    const char *name;      /* element name */
    unsigned char Flags;   /* flags (explained near the table data) */
    char EndTag;           /* Is it Required, Optional or Forbidden */
+   uchar_t TagLevel;      /* Used to heuristically parse bad HTML  */
    TagOpenFunct open;     /* Open function */
-   TagOpenFunct content;  /* Content function */
    TagCloseFunct close;   /* Close function */
 } TagInfo;
-
-/* Some element indexes required in scattered places */
-static int
-   i_A = a_Html_tag_index("a"),
-   i_BODY = a_Html_tag_index("body"),
-   i_BUTTON = a_Html_tag_index("button"),
-   i_DD = a_Html_tag_index("dd"),
-   i_DT = a_Html_tag_index("dt"),
-   i_HTML = a_Html_tag_index("html"),
-   i_HR = a_Html_tag_index("hr"),
-   i_LI = a_Html_tag_index("li"),
-   i_OPTGROUP = a_Html_tag_index("optgroup"),
-   i_OPTION = a_Html_tag_index("option"),
-   i_P  = a_Html_tag_index("p"),
-   i_SELECT = a_Html_tag_index("select"),
-   i_TEXTAREA = a_Html_tag_index("textarea"),
-   i_TD = a_Html_tag_index("td"),
-   i_TR = a_Html_tag_index("tr"),
-   i_TBODY = a_Html_tag_index("tbody"),
-   i_TH = a_Html_tag_index("th");
-
+extern const TagInfo Tags[];
 
 /*-----------------------------------------------------------------------------
  *-----------------------------------------------------------------------------
@@ -147,25 +129,23 @@ static int
  *-----------------------------------------------------------------------------
  *---------------------------------------------------------------------------*/
 
-/**
+/*
  * Collect HTML error strings.
  */
 void DilloHtml::bugMessage(const char *format, ... )
 {
    va_list argp;
 
-   if (bw->num_page_bugs)
-      dStr_append_c(bw->page_bugs, '\n');
    dStr_sprintfa(bw->page_bugs,
                  "HTML warning: line %d, ",
-                 getCurrLineNumber());
+                 getCurTagLineNumber());
    va_start(argp, format);
    dStr_vsprintfa(bw->page_bugs, format, argp);
    va_end(argp);
    a_UIcmd_set_bug_prog(bw, ++bw->num_page_bugs);
 }
 
-/**
+/*
  * Wrapper for a_Url_new that adds an error detection message.
  * If use_base_url is TRUE, it uses base_url. Otherwise it uses html->base_url.
  */
@@ -173,39 +153,31 @@ DilloUrl *a_Html_url_new(DilloHtml *html,
                          const char *url_str, const char *base_url,
                          int use_base_url)
 {
-   if (!url_str) {
-      MSG("a_Html_url_new: URL is NULL\n");
-      return NULL;
-   }
-
-   DilloUrl *url = a_Url_new(url_str,
-                   (use_base_url) ? base_url : URL_STR_(html->base_url));
-
-   if (!url) {
-      BUG_MSG("URL is not valid '%s'.", url_str);
-      return NULL;
-   }
-
+   DilloUrl *url;
    int n_ic, n_ic_spc;
+
+   url = a_Url_new(url_str,
+                   (use_base_url) ? base_url : URL_STR_(html->base_url));
    if ((n_ic = URL_ILLEGAL_CHARS(url)) != 0) {
       const char *suffix = (n_ic) > 1 ? "s" : "";
       n_ic_spc = URL_ILLEGAL_CHARS_SPC(url);
       if (n_ic == n_ic_spc) {
-         BUG_MSG("URL has %d illegal space%s ('%s').", n_ic, suffix, url_str);
+         BUG_MSG("URL has %d illegal character%s (%d space%s)\n",
+                 n_ic, suffix, n_ic_spc, suffix);
       } else if (n_ic_spc == 0) {
-         BUG_MSG("URL has %d illegal byte%s in {00-1F, 7F-FF} range ('%s').",
-                 n_ic, suffix, url_str);
+         BUG_MSG("URL has %d illegal character%s (%d in {00-1F, 7F} range)\n",
+                 n_ic, suffix, n_ic);
       } else {
-         BUG_MSG("URL has %d illegal byte%s: "
-                 "%d space%s and %d in {00-1F, 7F-FF} range ('%s').",
+         BUG_MSG("URL has %d illegal character%s: "
+                 "%d space%s, and %d in {00-1F, 7F} range\n",
                  n_ic, suffix,
-                 n_ic_spc, n_ic_spc > 1 ? "s" : "", n_ic-n_ic_spc, url_str);
+                 n_ic_spc, n_ic_spc > 1 ? "s" : "", n_ic-n_ic_spc);
       }
    }
    return url;
 }
 
-/**
+/*
  * Set callback function and callback data for the "html/text" MIME type.
  */
 void *a_Html_text(const char *Type, void *P, CA_Callback_t *Call, void **Data)
@@ -224,7 +196,7 @@ static void Html_free(void *data)
    delete ((DilloHtml*)data);
 }
 
-/**
+/*
  * Used by the "Load images" page menuitem.
  */
 void a_Html_load_images(void *v_html, DilloUrl *pattern)
@@ -234,7 +206,7 @@ void a_Html_load_images(void *v_html, DilloUrl *pattern)
    html->loadImages(pattern);
 }
 
-/**
+/*
  * Search for form
  */
 static bool Html_contains_form(DilloHtml *html, void *v_form)
@@ -247,7 +219,7 @@ static bool Html_contains_form(DilloHtml *html, void *v_form)
    return false;
 }
 
-/**
+/*
  * Used by the "Submit form" form menuitem.
  */
 void a_Html_form_submit(void *v_html, void *v_form)
@@ -260,7 +232,7 @@ void a_Html_form_submit(void *v_html, void *v_form)
    }
 }
 
-/**
+/*
  * Used by the "Reset form" form menuitem.
  */
 void a_Html_form_reset(void *v_html, void *v_form)
@@ -273,7 +245,7 @@ void a_Html_form_reset(void *v_html, void *v_form)
    }
 }
 
-/**
+/*
  * Used by the "Show/Hide hiddens" form menuitem.
  */
 void a_Html_form_display_hiddens(void *v_html, void *v_form, bool_t display)
@@ -286,7 +258,21 @@ void a_Html_form_display_hiddens(void *v_html, void *v_form, bool_t display)
    }
 }
 
-/**
+/*
+ * Used by the "Create search..." form menuitem.
+ */
+void a_Html_form_create_search(void *v_html, void *v_form)
+{
+   DilloHtml *html = (DilloHtml*)v_html;
+   const char *title = a_History_get_title_by_url(html->page_url, 1);
+
+   if (Html_contains_form(html, v_form)) {
+      /* it's still valid */
+      a_Html_form_create_search2(v_form, title);
+   }
+}
+
+/*
  * Set the URL data for image maps.
  */
 static void Html_set_link_coordinates(DilloHtml *html, int link, int x, int y)
@@ -299,7 +285,7 @@ static void Html_set_link_coordinates(DilloHtml *html, int link, int x, int y)
    }
 }
 
-/**
+/*
  * Create a new link, set it as the url's parent
  * and return the index.
  */
@@ -311,7 +297,24 @@ static int Html_set_new_link(DilloHtml *html, DilloUrl **url)
    return nl;
 }
 
-/**
+/*
+ * Add a new image to our list.
+ * image is NULL if dillo will try to load the image immediately.
+ */
+static void Html_add_new_htmlimage(DilloHtml *html,
+                                   DilloUrl **url, DilloImage *image)
+{
+   DilloHtmlImage *hi = dNew(DilloHtmlImage, 1);
+   hi->url = *url;
+   hi->image = image;
+   a_Image_ref(image);
+
+   int n = html->images->size();
+   html->images->increase();
+   html->images->set(n, hi);
+}
+
+/*
  * Evaluates the ALIGN attribute (left|center|right|justify) and
  * sets the style at the top of the stack.
  */
@@ -322,24 +325,21 @@ void a_Html_tag_set_align_attr(DilloHtml *html, const char *tag, int tagsize)
    if ((align = a_Html_get_attr(html, tag, tagsize, "align"))) {
       TextAlignType textAlignType = TEXT_ALIGN_LEFT;
 
-      if (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)
-         BUG_MSG("The align attribute is obsolete in HTML5.");
-
-      if (dStrAsciiCasecmp (align, "left") == 0)
+      if (dStrcasecmp (align, "left") == 0)
          textAlignType = TEXT_ALIGN_LEFT;
-      else if (dStrAsciiCasecmp (align, "right") == 0)
+      else if (dStrcasecmp (align, "right") == 0)
          textAlignType = TEXT_ALIGN_RIGHT;
-      else if (dStrAsciiCasecmp (align, "center") == 0)
+      else if (dStrcasecmp (align, "center") == 0)
          textAlignType = TEXT_ALIGN_CENTER;
-      else if (dStrAsciiCasecmp (align, "justify") == 0)
+      else if (dStrcasecmp (align, "justify") == 0)
          textAlignType = TEXT_ALIGN_JUSTIFY;
 #if 0
-      else if (dStrAsciiCasecmp (align, "char") == 0) {
+      else if (dStrcasecmp (align, "char") == 0) {
          /* TODO: Actually not supported for <p> etc. */
          v.textAlign = TEXT_ALIGN_STRING;
          if ((charattr = a_Html_get_attr(html, tag, tagsize, "char"))) {
             if (charattr[0] == 0)
-               /* TODO: ALIGN=" ", and even ALIGN="&32;" will result in
+               /* TODO: ALIGN=" ", and even ALIGN="&32;" will reult in
                 * an empty string (don't know whether the latter is
                 * correct, has to be clarified with the specs), so
                 * that for empty strings, " " is assumed. */
@@ -356,7 +356,7 @@ void a_Html_tag_set_align_attr(DilloHtml *html, const char *tag, int tagsize)
    }
 }
 
-/**
+/*
  * Evaluates the VALIGN attribute (top|bottom|middle|baseline) and
  * sets the style in style_attrs. Returns true when set.
  */
@@ -366,14 +366,11 @@ bool a_Html_tag_set_valign_attr(DilloHtml *html, const char *tag, int tagsize)
    VAlignType valign;
 
    if ((attr = a_Html_get_attr(html, tag, tagsize, "valign"))) {
-      if (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)
-         BUG_MSG("The valign attribute is obsolete in HTML5.");
-
-      if (dStrAsciiCasecmp (attr, "top") == 0)
+      if (dStrcasecmp (attr, "top") == 0)
          valign = VALIGN_TOP;
-      else if (dStrAsciiCasecmp (attr, "bottom") == 0)
+      else if (dStrcasecmp (attr, "bottom") == 0)
          valign = VALIGN_BOTTOM;
-      else if (dStrAsciiCasecmp (attr, "baseline") == 0)
+      else if (dStrcasecmp (attr, "baseline") == 0)
          valign = VALIGN_BASELINE;
       else
          valign = VALIGN_MIDDLE;
@@ -386,47 +383,21 @@ bool a_Html_tag_set_valign_attr(DilloHtml *html, const char *tag, int tagsize)
 }
 
 
-/**
- * Create and add a new Textblock to the current Textblock. Typically
- * only one of addBreaks and addBreakOpt is true.
+/*
+ * Create and add a new Textblock to the current Textblock
  */
-static void Html_add_textblock(DilloHtml *html, bool addBreaks, int breakSpace,
-                               bool addBreakOpt)
+static void Html_add_textblock(DilloHtml *html, int space)
 {
    Textblock *textblock = new Textblock (prefs.limit_text_width);
-   Style *style;
 
-   if (addBreaks) {
-      StyleAttrs attrs = *(html->style ());
-      attrs.display = DISPLAY_BLOCK;
-      style = Style::create (&attrs);
-   } else {
-      style = html->style ();
-      style->ref ();
-   }
-
-   if (addBreaks)
-      HT2TB(html)->addParbreak (breakSpace, html->wordStyle ());
-
-   HT2TB(html)->addWidget (textblock, style); /* Works also for floats etc. */
-   if (addBreakOpt)
-      HT2TB(html)->addBreakOption (html->style (), false);
-
-   if (addBreaks)
-      HT2TB(html)->addParbreak (breakSpace, html->wordStyle ());
+   HT2TB(html)->addParbreak (space, html->styleEngine->wordStyle ());
+   HT2TB(html)->addWidget (textblock, html->styleEngine->style ());
+   HT2TB(html)->addParbreak (space, html->styleEngine->wordStyle ());
    S_TOP(html)->textblock = html->dw = textblock;
-   if (addBreaks)
-      S_TOP(html)->hand_over_break = true;
-
-   style->unref ();
+   S_TOP(html)->hand_over_break = true;
 }
 
-static bool Html_must_add_breaks(DilloHtml *html)
-{
-   return HT2TB(html)->mustAddBreaks (html->style ());
-}
-
-/**
+/*
  * Create and initialize a new DilloHtml class
  */
 DilloHtml::DilloHtml(BrowserWindow *p_bw, const DilloUrl *url,
@@ -456,13 +427,14 @@ DilloHtml::DilloHtml(BrowserWindow *p_bw, const DilloUrl *url,
 
    stop_parser = false;
 
-   CurrOfs = OldOfs = 0;
-   OldLine = 1;
+   CurrTagOfs = 0;
+   OldTagOfs = 0;
+   OldTagLine = 1;
 
    DocType = DT_NONE;    /* assume Tag Soup 0.0!   :-) */
    DocTypeVersion = 0.0f;
 
-   styleEngine = new StyleEngine (HT2LT (this), page_url, base_url, bw->zoom);
+   styleEngine = new StyleEngine (HT2LT (this));
 
    cssUrls = new misc::SimpleVector <DilloUrl*> (1);
 
@@ -472,7 +444,6 @@ DilloHtml::DilloHtml(BrowserWindow *p_bw, const DilloUrl *url,
    stack->getRef(0)->table_mode = DILLO_HTML_TABLE_MODE_NONE;
    stack->getRef(0)->table_border_mode = DILLO_HTML_TABLE_BORDER_SEPARATE;
    stack->getRef(0)->cell_text_align_set = false;
-   stack->getRef(0)->display_none = false;
    stack->getRef(0)->list_type = HTML_LIST_NONE;
    stack->getRef(0)->list_number = 0;
    stack->getRef(0)->tag_idx = -1;               /* MUST not be used */
@@ -493,8 +464,6 @@ DilloHtml::DilloHtml(BrowserWindow *p_bw, const DilloUrl *url,
    ReqTagClose = false;
    TagSoup = true;
    loadCssFromStash = false;
-   PrevWasBodyClose = false;
-   PrevWasHtmlClose = false;
 
    Num_HTML = Num_HEAD = Num_BODY = Num_TITLE = 0;
 
@@ -516,7 +485,7 @@ DilloHtml::DilloHtml(BrowserWindow *p_bw, const DilloUrl *url,
    dw->setDeleteCallback(Html_free, this);
 }
 
-/**
+/*
  * Miscellaneous initializations for Dw
  */
 void DilloHtml::initDw()
@@ -524,13 +493,13 @@ void DilloHtml::initDw()
    dReturn_if_fail (dw == NULL);
 
    /* Create the main widget */
-   dw = stack->getRef(0)->textblock =  new Textblock (prefs.limit_text_width);
+   dw = stack->getRef(0)->textblock = new Textblock (prefs.limit_text_width);
 
    bw->num_page_bugs = 0;
    dStr_truncate(bw->page_bugs, 0);
 }
 
-/**
+/*
  * Free memory used by the DilloHtml class.
  */
 DilloHtml::~DilloHtml()
@@ -571,7 +540,7 @@ DilloHtml::~DilloHtml()
    delete styleEngine;
 }
 
-/**
+/*
  * Process the newly arrived html and put it into the page structure.
  * (This function is called by Html_callback whenever there's new data)
  */
@@ -598,30 +567,28 @@ void DilloHtml::write(char *Buf, int BufSize, int Eof)
    Start_Ofs += token_start;
 }
 
-/**
- * Return the line number of the tag/word being processed by the parser.
+/*
+ * Return the line number of the tag being processed by the parser.
  * Also update the offsets.
  */
-int DilloHtml::getCurrLineNumber()
+int DilloHtml::getCurTagLineNumber()
 {
    int i, ofs, line;
    const char *p = Start_Buf;
 
    dReturn_val_if_fail(p != NULL, -1);
-   /* Disable line counting for META hack. Buffers differ. */
-   dReturn_val_if((InFlags & IN_META_HACK), -1);
 
-   ofs = CurrOfs;
-   line = OldLine;
-   for (i = OldOfs; i < ofs; ++i)
-      if (p[i] == '\n' || (p[i] == '\r' && p[i+1] != '\n'))
+   ofs = CurrTagOfs;
+   line = OldTagLine;
+   for (i = OldTagOfs; i < ofs; ++i)
+      if (p[i] == '\n')
          ++line;
-   OldOfs = CurrOfs;
-   OldLine = line;
+   OldTagOfs = CurrTagOfs;
+   OldTagLine = line;
    return line;
 }
 
-/**
+/*
  * Free parsing data.
  */
 void DilloHtml::freeParseData()
@@ -634,7 +601,7 @@ void DilloHtml::freeParseData()
    dFree(charset);
 }
 
-/**
+/*
  * Finish parsing a HTML page. Close the parser and close the client.
  * The class is not deleted here, it remains until the widget is destroyed.
  */
@@ -644,24 +611,17 @@ void DilloHtml::finishParsing(int ClientKey)
 
    dReturn_if (stop_parser == true);
 
-   /* flag we've already parsed up to the last byte */
-   InFlags |= IN_EOF;
-
    /* force the close of elements left open (TODO: not for XHTML) */
    while ((si = stack->size() - 1)) {
       if (stack->getRef(si)->tag_idx != -1) {
          Html_tag_cleanup_at_close(this, stack->getRef(si)->tag_idx);
       }
    }
-
-   /* Nothing left to do with the parser. Clear all flags, except EOF. */
-   InFlags = IN_EOF;
-
    /* Remove this client from our active list */
    a_Bw_close_client(bw, ClientKey);
 }
 
-/**
+/*
  * Allocate and insert form information.
  */
 int DilloHtml::formNew(DilloHtmlMethod method, const DilloUrl *action,
@@ -678,7 +638,7 @@ int DilloHtml::formNew(DilloHtmlMethod method, const DilloUrl *action,
    return forms->size();
 }
 
-/**
+/*
  * Get the current form.
  */
 DilloHtmlForm *DilloHtml::getCurrentForm ()
@@ -696,38 +656,34 @@ bool_t DilloHtml::unloadedImages()
    return FALSE;
 }
 
-/**
+/*
  * Load images if they were disabled.
  */
 void DilloHtml::loadImages (const DilloUrl *pattern)
 {
    dReturn_if (a_Bw_expecting(bw));
 
-   /* If the user asked for a specific image, the user (NULL) is the requester,
-    * and the domain mechanism will always permit the request. But if the user
-    * just asked for all images (clicking "Load images"), use the page URL as
-    * the requester so that the domain mechanism can act as a filter.
-    * If the possible patterns become more complex, it might be good to have
-    * the caller supply the requester instead.
+   /* If the user asked for a specific URL, the user (NULL) is the requester,
+    * but if the user just asked for all URLs, use the page URL as the
+    * requester. If the possible patterns become more complex, it might be
+    * good to have the caller supply the requester instead.
     */
    const DilloUrl *requester = pattern ? NULL : this->page_url;
 
    for (int i = 0; i < images->size(); i++) {
-      DilloHtmlImage *hi = images->get(i);
-
-      if (hi->image) {
-         assert(hi->url);
-         if ((!pattern) || (!a_Url_cmp(hi->url, pattern))) {
-            if (Html_load_image(bw, hi->url, requester, hi->image)) {
-               a_Image_unref (hi->image);
-               hi->image = NULL;  // web owns it now
+      if (images->get(i)->image) {
+         if ((!pattern) || (!a_Url_cmp(images->get(i)->url, pattern))) {
+            if (Html_load_image(bw, images->get(i)->url, requester,
+                                images->get(i)->image)) {
+               a_Image_unref (images->get(i)->image);
+               images->get(i)->image = NULL;  // web owns it now
             }
          }
       }
    }
 }
 
-/**
+/*
  * Save URL in a vector (may be loaded later).
  */
 void DilloHtml::addCssUrl(const DilloUrl *url)
@@ -754,7 +710,7 @@ bool DilloHtml::HtmlLinkReceiver::enter (Widget *widget, int link, int img,
    return true;
 }
 
-/**
+/*
  * Handle the "press" signal.
  */
 bool DilloHtml::HtmlLinkReceiver::press (Widget *widget, int link, int img,
@@ -780,7 +736,7 @@ bool DilloHtml::HtmlLinkReceiver::press (Widget *widget, int link, int img,
             a_UIcmd_page_popup(bw, bw->num_page_bugs != 0, html->cssUrls);
             ret = true;
          } else {
-            a_UIcmd_link_popup(bw, html->links->get(link), html->page_url);
+            a_UIcmd_link_popup(bw, html->links->get(link));
             ret = true;
          }
       }
@@ -788,7 +744,7 @@ bool DilloHtml::HtmlLinkReceiver::press (Widget *widget, int link, int img,
    return ret;
 }
 
-/**
+/*
  * Handle the "click" signal.
  */
 bool DilloHtml::HtmlLinkReceiver::click (Widget *widget, int link, int img,
@@ -812,15 +768,16 @@ bool DilloHtml::HtmlLinkReceiver::click (Widget *widget, int link, int img,
 
       Html_set_link_coordinates(html, link, x, y);
 
-      if (event->button == 1) {
-         a_UIcmd_open_url(bw, url);
-      } else if (event->button == 2) {
+      if (event->button == 2 ||
+          (event->button == 1 && event->state & CONTROL_MASK)) {
          if (prefs.middle_click_opens_new_tab) {
             int focus = prefs.focus_new_tab ? 1 : 0;
-            if (event->state == SHIFT_MASK) focus = !focus;
+            if (event->state & SHIFT_MASK) focus = !focus;
             a_UIcmd_open_url_nt(bw, url, focus);
          } else
             a_UIcmd_open_url_nw(bw, url);
+      } else if (event->button == 1) {
+         a_UIcmd_open_url(bw, url);
       } else {
          return false;
       }
@@ -837,7 +794,7 @@ bool DilloHtml::HtmlLinkReceiver::click (Widget *widget, int link, int img,
    return true;
 }
 
-/**
+/*
  * Initialize the stash buffer
  */
 void a_Html_stash_init(DilloHtml *html)
@@ -847,16 +804,113 @@ void a_Html_stash_init(DilloHtml *html)
    dStr_truncate(html->Stash, 0);
 }
 
-/**
+/* Entities list from the HTML 4.01 DTD */
+typedef struct {
+   const char *entity;
+   int isocode;
+} Ent_t;
+
+#define NumEnt 252
+static const Ent_t Entities[NumEnt] = {
+   {"AElig",0306}, {"Aacute",0301}, {"Acirc",0302},  {"Agrave",0300},
+   {"Alpha",01621},{"Aring",0305},  {"Atilde",0303}, {"Auml",0304},
+   {"Beta",01622}, {"Ccedil",0307}, {"Chi",01647},   {"Dagger",020041},
+   {"Delta",01624},{"ETH",0320},    {"Eacute",0311}, {"Ecirc",0312},
+   {"Egrave",0310},{"Epsilon",01625},{"Eta",01627},  {"Euml",0313},
+   {"Gamma",01623},{"Iacute",0315}, {"Icirc",0316},  {"Igrave",0314},
+   {"Iota",01631}, {"Iuml",0317},   {"Kappa",01632}, {"Lambda",01633},
+   {"Mu",01634},   {"Ntilde",0321}, {"Nu",01635},    {"OElig",0522},
+   {"Oacute",0323},{"Ocirc",0324},  {"Ograve",0322}, {"Omega",01651},
+   {"Omicron",01637},{"Oslash",0330},{"Otilde",0325},{"Ouml",0326},
+   {"Phi",01646},  {"Pi",01640},    {"Prime",020063},{"Psi",01650},
+   {"Rho",01641},  {"Scaron",0540}, {"Sigma",01643}, {"THORN",0336},
+   {"Tau",01644},  {"Theta",01630}, {"Uacute",0332}, {"Ucirc",0333},
+   {"Ugrave",0331},{"Upsilon",01645},{"Uuml",0334},  {"Xi",01636},
+   {"Yacute",0335},{"Yuml",0570},   {"Zeta",01626},  {"aacute",0341},
+   {"acirc",0342}, {"acute",0264},  {"aelig",0346},  {"agrave",0340},
+   {"alefsym",020465},{"alpha",01661},{"amp",38},    {"and",021047},
+   {"ang",021040}, {"aring",0345},  {"asymp",021110},{"atilde",0343},
+   {"auml",0344},  {"bdquo",020036},{"beta",01662},  {"brvbar",0246},
+   {"bull",020042},{"cap",021051},  {"ccedil",0347}, {"cedil",0270},
+   {"cent",0242},  {"chi",01707},   {"circ",01306},  {"clubs",023143},
+   {"cong",021105},{"copy",0251},   {"crarr",020665},{"cup",021052},
+   {"curren",0244},{"dArr",020723}, {"dagger",020040},{"darr",020623},
+   {"deg",0260},   {"delta",01664}, {"diams",023146},{"divide",0367},
+   {"eacute",0351},{"ecirc",0352},  {"egrave",0350}, {"empty",021005},
+   {"emsp",020003},{"ensp",020002}, {"epsilon",01665},{"equiv",021141},
+   {"eta",01667},  {"eth",0360},    {"euml",0353},   {"euro",020254},
+   {"exist",021003},{"fnof",0622},  {"forall",021000},{"frac12",0275},
+   {"frac14",0274},{"frac34",0276}, {"frasl",020104},{"gamma",01663},
+   {"ge",021145},  {"gt",62},       {"hArr",020724}, {"harr",020624},
+   {"hearts",023145},{"hellip",020046},{"iacute",0355},{"icirc",0356},
+   {"iexcl",0241}, {"igrave",0354}, {"image",020421},{"infin",021036},
+   {"int",021053}, {"iota",01671},  {"iquest",0277}, {"isin",021010},
+   {"iuml",0357},  {"kappa",01672}, {"lArr",020720}, {"lambda",01673},
+   {"lang",021451},{"laquo",0253},  {"larr",020620}, {"lceil",021410},
+   {"ldquo",020034},{"le",021144},  {"lfloor",021412},{"lowast",021027},
+   {"loz",022712}, {"lrm",020016},  {"lsaquo",020071},{"lsquo",020030},
+   {"lt",60},      {"macr",0257},   {"mdash",020024},{"micro",0265},
+   {"middot",0267},{"minus",021022},{"mu",01674},    {"nabla",021007},
+   {"nbsp",0240},  {"ndash",020023},{"ne",021140},   {"ni",021013},
+   {"not",0254},   {"notin",021011},{"nsub",021204}, {"ntilde",0361},
+   {"nu",01675},   {"oacute",0363}, {"ocirc",0364},  {"oelig",0523},
+   {"ograve",0362},{"oline",020076},{"omega",01711}, {"omicron",01677},
+   {"oplus",021225},{"or",021050},  {"ordf",0252},   {"ordm",0272},
+   {"oslash",0370},{"otilde",0365}, {"otimes",021227},{"ouml",0366},
+   {"para",0266},  {"part",021002}, {"permil",020060},{"perp",021245},
+   {"phi",01706},  {"pi",01700},    {"piv",01726},   {"plusmn",0261},
+   {"pound",0243}, {"prime",020062},{"prod",021017}, {"prop",021035},
+   {"psi",01710},  {"quot",34},     {"rArr",020722}, {"radic",021032},
+   {"rang",021452},{"raquo",0273},  {"rarr",020622}, {"rceil",021411},
+   {"rdquo",020035},{"real",020434},{"reg",0256},    {"rfloor",021413},
+   {"rho",01701},  {"rlm",020017},  {"rsaquo",020072},{"rsquo",020031},
+   {"sbquo",020032},{"scaron",0541},{"sdot",021305}, {"sect",0247},
+   {"shy",0255},   {"sigma",01703}, {"sigmaf",01702},{"sim",021074},
+   {"spades",023140},{"sub",021202},{"sube",021206}, {"sum",021021},
+   {"sup",021203}, {"sup1",0271},   {"sup2",0262},   {"sup3",0263},
+   {"supe",021207},{"szlig",0337},  {"tau",01704},   {"there4",021064},
+   {"theta",01670},{"thetasym",01721},{"thinsp",020011},{"thorn",0376},
+   {"tilde",01334},{"times",0327},  {"trade",020442},{"uArr",020721},
+   {"uacute",0372},{"uarr",020621}, {"ucirc",0373},  {"ugrave",0371},
+   {"uml",0250},   {"upsih",01722}, {"upsilon",01705},{"uuml",0374},
+   {"weierp",020430},{"xi",01676},  {"yacute",0375}, {"yen",0245},
+   {"yuml",0377},  {"zeta",01666},  {"zwj",020015},  {"zwnj",020014}
+};
+
+
+/*
+ * Comparison function for binary search
+ */
+static int Html_entity_comp(const void *a, const void *b)
+{
+   return strcmp(((Ent_t *)a)->entity, ((Ent_t *)b)->entity);
+}
+
+/*
+ * Binary search of 'key' in entity list
+ */
+static int Html_entity_search(char *key)
+{
+   Ent_t *res, EntKey;
+
+   EntKey.entity = key;
+   res = (Ent_t*) bsearch(&EntKey, Entities, NumEnt,
+                          sizeof(Ent_t), Html_entity_comp);
+   if (res)
+     return (res - Entities);
+   return -1;
+}
+
+/*
  * This is M$ non-standard "smart quotes" (w1252). Now even deprecated by them!
  *
  * SGML for HTML4.01 defines c >= 128 and c <= 159 as UNUSED.
- * TODO: Probably I should remove this hack. --Jcid
+ * TODO: Probably I should remove this hack, and add a HTML warning. --Jcid
  */
-static int Html_ms_stupid_quotes_2ucs(int codepoint)
+static int Html_ms_stupid_quotes_2ucs(int isocode)
 {
    int ret;
-   switch (codepoint) {
+   switch (isocode) {
    case 145:
    case 146: ret = '\''; break;
    case 147:
@@ -864,244 +918,129 @@ static int Html_ms_stupid_quotes_2ucs(int codepoint)
    case 149: ret = 176; break;
    case 150:
    case 151: ret = '-'; break;
-   default:  ret = codepoint; break;
+   default:  ret = isocode; break;
    }
    return ret;
 }
 
-/**
- * Parse a numeric character reference (e.g., "&#47;" or "&#x2F;").
- * The "&#" has already been consumed.
- */
-static const char *Html_parse_numeric_charref(DilloHtml *html, char *tok,
-                                              bool_t is_attr, int *entsize)
-{
-   static char buf[5];
-   char *s = tok;
-   int n, codepoint = -1;
-
-   errno = 0;
-
-   if (*s == 'x' || *s == 'X') {
-      if (isxdigit(*++s)) {
-         /* strtol with base 16 accepts leading "0x" - we don't */
-         if (*s == '0' && s[1] == 'x') {
-            s++;
-            codepoint = 0;
-         } else {
-            codepoint = strtol(s, &s, 16);
-         }
-      }
-   } else if (isdigit(*s)) {
-      codepoint = strtol(s, &s, 10);
-   }
-   if (errno)
-      codepoint = -1;
-
-   if (*s == ';')
-      s++;
-   else {
-      if (prefs.show_extra_warnings && (html->DocType == DT_XHTML ||
-          (html->DocType == DT_HTML && html->DocTypeVersion <= 4.01f))) {
-         char c = *s;
-         *s = '\0';
-         BUG_MSG("Character reference '&#%s' lacks ';'.", tok);
-         *s = c;
-      }
-      /* Don't require ';' for old HTML, except that our current heuristic
-       * is to require it in attributes to avoid cases like "&copy=1" found
-       * in URLs.
-       */
-      if (is_attr || html->DocType == DT_XHTML ||
-          (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)) {
-         return NULL;
-      }
-
-   }
-   if ((codepoint < 0x20 && codepoint != '\t' && codepoint != '\n' &&
-        codepoint != '\f') ||
-       (codepoint >= 0x7f && codepoint <= 0x9f) ||
-       (codepoint >= 0xd800 && codepoint <= 0xdfff) || codepoint > 0x10ffff ||
-       ((codepoint & 0xfffe) == 0xfffe) ||
-       (!(html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f) &&
-        codepoint > 0xffff)) {
-      /* this catches null bytes, errors, codes out of range, disallowed
-       * control chars, permanently undefined chars, and surrogates.
-       */
-      char c = *s;
-      *s = '\0';
-      BUG_MSG("Numeric character reference '&#%s' is not valid.", tok);
-      *s = c;
-
-      codepoint = (codepoint >= 145 && codepoint <= 151) ?
-                  Html_ms_stupid_quotes_2ucs(codepoint) : -1;
-   }
-   if (codepoint != -1) {
-      if (codepoint >= 128) {
-         n = a_Utf8_encode(codepoint, buf);
-      } else {
-         n = 1;
-         buf[0] = (char) codepoint;
-      }
-      assert(n < 5);
-      buf[n] = '\0';
-      *entsize = s-tok+2;
-      return buf;
-   } else {
-      return NULL;
-   }
-}
-
-/**
- * Comparison function for binary search
- */
-static int Html_charref_comp(const void *a, const void *b)
-{
-   return strcmp(((Charref_t *)a)->ref, ((Charref_t *)b)->ref);
-}
-
-/**
- * Binary search of 'key' in charref list
- */
-static Charref_t *Html_charref_search(char *key)
-{
-   Charref_t RefKey;
-
-   RefKey.ref = key;
-   return (Charref_t*) bsearch(&RefKey, Charrefs, NumRef,
-                       sizeof(Charref_t), Html_charref_comp);
-}
-
-/**
- * Parse a named character reference (e.g., "&amp;" or "&hellip;").
- * The "&" has already been consumed.
- */
-static const char *Html_parse_named_charref(DilloHtml *html, char *tok,
-                                            bool_t is_attr, int *entsize)
-{
-   Charref_t *p;
-   char c;
-   char *s = tok;
-   const char *ret = NULL;
-
-   while (*++s && (isalnum(*s) || strchr(":_.-", *s))) ;
-   c = *s;
-   *s = '\0';
-   if (c != ';') {
-      if (prefs.show_extra_warnings && (html->DocType == DT_XHTML ||
-          (html->DocType == DT_HTML && html->DocTypeVersion <= 4.01f)))
-         BUG_MSG("Character reference '&%s' lacks ';'.", tok);
-
-      /* Don't require ';' for old HTML, except that our current heuristic
-       * is to require it in attributes to avoid cases like "&copy=1" found
-       * in URLs.
-       */
-      if (is_attr || html->DocType == DT_XHTML ||
-          (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)) {
-         return ret;
-      }
-   }
-
-   if ((p = Html_charref_search(tok))) {
-      ret = (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f) ?
-            p->html5_str : p->html4_str;
-   }
-
-   if (!ret && html->DocType == DT_XHTML && !strcmp(tok, "apos"))
-      ret = "'";
-
-   *s = c;
-   if (c == ';')
-      s++;
-
-   if (!ret) {
-      c = *s;
-      *s = '\0';
-      BUG_MSG("Undefined character reference '&%s'.", tok);
-      *s = c;
-   }
-   *entsize = s-tok+1;
-   return ret;
-}
-
-/**
- * Given an entity, return the corresponding string.
- * Returns NULL if not a valid entity.
+/*
+ * Given an entity, return the UCS character code.
+ * Returns a negative value (error code) if not a valid entity.
  *
  * The first character *token is assumed to be == '&'
  *
  * For valid entities, *entsize is set to the length of the parsed entity.
  */
-static const char *Html_parse_entity(DilloHtml *html, const char *token,
-                                     int toksize, int *entsize, bool_t is_attr)
+static int Html_parse_entity(DilloHtml *html, const char *token,
+                             int toksize, int *entsize)
 {
-   const char *ret = NULL;
-   char *tok;
-
-   if (toksize > 50) {
-      /* In pathological cases, attributes can be megabytes long and filled
-       * with character references. As of HTML5, the longest defined character
-       * reference is about 32 bytes long.
-       */
-      toksize = 50;
-   }
+   int isocode, i;
+   char *tok, *s, c;
 
    token++;
-   tok = dStrndup(token, (uint_t)toksize);
+   tok = s = toksize ? dStrndup(token, (uint_t)toksize) : dStrdup(token);
 
-   if (*tok == '#') {
-      ret = Html_parse_numeric_charref(html, tok+1, is_attr, entsize);
-   } else if (isalpha(*tok)) {
-      ret = Html_parse_named_charref(html, tok, is_attr, entsize);
-   } else if (prefs.show_extra_warnings &&
-       (!(html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f))) {
-      // HTML5 doesn't mind literal '&'s.
-      BUG_MSG("Literal '&'.");
+   isocode = -1;
+
+   if (*s == '#') {
+      /* numeric character reference */
+      errno = 0;
+      if (*++s == 'x' || *s == 'X') {
+         if (isxdigit(*++s)) {
+            /* strtol with base 16 accepts leading "0x" - we don't */
+            if (*s == '0' && s[1] == 'x') {
+               s++;
+               isocode = 0;
+            } else {
+               isocode = strtol(s, &s, 16);
+            }
+         }
+      } else if (isdigit(*s)) {
+         isocode = strtol(s, &s, 10);
+      }
+
+      if (!isocode || errno || isocode > 0xffff) {
+         /* this catches null bytes, errors and codes >= 0xFFFF */
+         BUG_MSG("numeric character reference out of range\n");
+         isocode = -2;
+      }
+
+      if (isocode != -1) {
+         if (*s == ';')
+            s++;
+         else if (prefs.show_extra_warnings)
+            BUG_MSG("numeric character reference without trailing ';'\n");
+      }
+
+   } else if (isalpha(*s)) {
+      /* character entity reference */
+      while (*++s && (isalnum(*s) || strchr(":_.-", *s))) ;
+      c = *s;
+      *s = 0;
+
+      if ((i = Html_entity_search(tok)) == -1) {
+         if ((html->DocType == DT_HTML && html->DocTypeVersion == 4.01f) ||
+             html->DocType == DT_XHTML)
+            BUG_MSG("undefined character entity '%s'\n", tok);
+         isocode = -3;
+      } else
+         isocode = Entities[i].isocode;
+
+      if (c == ';')
+         s++;
+      else if (prefs.show_extra_warnings)
+         BUG_MSG("character entity reference without trailing ';'\n");
    }
+
+   *entsize = s-tok+1;
    dFree(tok);
 
-   return ret;
+   if (isocode >= 145 && isocode <= 151) {
+      /* TODO: remove this hack. */
+      isocode = Html_ms_stupid_quotes_2ucs(isocode);
+   } else if (isocode == -1 && prefs.show_extra_warnings)
+      BUG_MSG("literal '&'\n");
+
+   return isocode;
 }
 
-/**
- * Parse all the entities in a token. Takes the token and its length, and
- * returns a newly allocated string.
+/*
+ * Convert all the entities in a token to utf8 encoding. Takes
+ * a token and its length, and returns a newly allocated string.
  */
 char *a_Html_parse_entities(DilloHtml *html, const char *token, int toksize)
 {
    const char *esc_set = "&";
-   int i, s, entsize;
-   char *str;
+   char *new_str, buf[4];
+   int i, j, k, n, s, isocode, entsize;
 
-   s = strcspn(token, esc_set);
-   if (s >= toksize) {
-      /* no ampersands */
-      str = dStrndup(token, toksize);
-   } else {
-      Dstr *ds = dStr_sized_new(toksize);
+   new_str = dStrndup(token, toksize);
+   s = strcspn(new_str, esc_set);
+   if (new_str[s] == 0)
+      return new_str;
 
-      dStr_append_l(ds, token, s);
-
-      for (i = s; i < toksize; i++) {
-         const char *entstr;
-         const bool_t is_attr = FALSE;
-
-         if (token[i] == '&' &&
-             (entstr = Html_parse_entity(html, token+i, toksize-i, &entsize,
-                                         is_attr))) {
-            dStr_append(ds, entstr);
-            i += entsize-1;
+   for (i = j = s; i < toksize; i++) {
+      if (token[i] == '&' &&
+          (isocode = Html_parse_entity(html, token+i,
+                                       toksize-i, &entsize)) >= 0) {
+         if (isocode >= 128) {
+            /* multibyte encoding */
+            n = a_Utf8_encode(isocode, buf);
+            for (k = 0; k < n; ++k)
+               new_str[j++] = buf[k];
          } else {
-            dStr_append_c(ds, token[i]);
+            new_str[j++] = (char) isocode;
          }
+         i += entsize-1;
+      } else {
+         new_str[j++] = token[i];
       }
-      str = ds->str;
-      dStr_free(ds, 0);
    }
-   return str;
+   new_str[j] = '\0';
+   return new_str;
 }
 
-/**
+/*
  * For white-space: pre-line, we must break the line if encountering a newline.
  * Otherwise, collapse whitespace as usual.
  */
@@ -1116,15 +1055,15 @@ static void Html_process_space_pre_line(DilloHtml *html, const char *space,
          breakCnt++;
          html->PrevWasCR = (space[i] == '\r');
 
-         HT2TB(html)->addLinebreak (html->wordStyle ());
+         HT2TB(html)->addLinebreak (html->styleEngine->wordStyle ());
       }
    }
    if (breakCnt == 0) {
-      HT2TB(html)->addSpace(html->wordStyle ());
+      HT2TB(html)->addSpace(html->styleEngine->wordStyle ());
    }
 }
 
-/**
+/*
  * Parse spaces
  */
 static void Html_process_space(DilloHtml *html, const char *space,
@@ -1134,9 +1073,7 @@ static void Html_process_space(DilloHtml *html, const char *space,
    int i, offset;
    DilloHtmlParseMode parse_mode = S_TOP(html)->parse_mode;
 
-   if (S_TOP(html)->display_none) {
-      /* do nothing */
-   } else if (parse_mode == DILLO_HTML_PARSE_MODE_STASH) {
+   if (parse_mode == DILLO_HTML_PARSE_MODE_STASH) {
       html->StashSpace = (html->Stash->len > 0);
 
    } else if (parse_mode == DILLO_HTML_PARSE_MODE_VERBATIM) {
@@ -1153,11 +1090,12 @@ static void Html_process_space(DilloHtml *html, const char *space,
 
             if (spaceCnt) {
                spc = dStrnfill(spaceCnt, ' ');
-               HT2TB(html)->addText (spc, spaceCnt, html->wordStyle ());
+               HT2TB(html)->addText (spc, spaceCnt,
+                                     html->styleEngine->wordStyle ());
                dFree(spc);
                spaceCnt = 0;
             }
-            HT2TB(html)->addLinebreak (html->wordStyle ());
+            HT2TB(html)->addLinebreak (html->styleEngine->wordStyle ());
             html->pre_column = 0;
          }
          html->PreFirstChar = false;
@@ -1169,7 +1107,7 @@ static void Html_process_space(DilloHtml *html, const char *space,
             break;
          case '\t':
             if (prefs.show_extra_warnings)
-               BUG_MSG("TAB character inside <pre>.");
+               BUG_MSG("TAB character inside <PRE>\n");
             offset = TAB_SIZE - html->pre_column % TAB_SIZE;
             spaceCnt += offset;
             html->pre_column += offset;
@@ -1184,20 +1122,19 @@ static void Html_process_space(DilloHtml *html, const char *space,
       }
 
       if (spaceCnt) {
-         // add break possibility for the white-space:pre-wrap case
-         HT2TB(html)->addBreakOption (html->wordStyle (), false);
          spc = dStrnfill(spaceCnt, ' ');
-         HT2TB(html)->addText (spc, spaceCnt, html->wordStyle ());
+         HT2TB(html)->addText (spc, spaceCnt, html->styleEngine->wordStyle ());
          dFree(spc);
       }
 
    } else {
       if (SGML_SPCDEL) {
          /* SGML_SPCDEL ignores white space immediately after an open tag */
-      } else if (html->wordStyle ()->whiteSpace == WHITE_SPACE_PRE_LINE) {
+      } else if (html->styleEngine->wordStyle ()->whiteSpace ==
+                                                        WHITE_SPACE_PRE_LINE) {
          Html_process_space_pre_line(html, space, spacesize);
       } else {
-         HT2TB(html)->addSpace(html->wordStyle ());
+         HT2TB(html)->addSpace(html->styleEngine->wordStyle ());
       }
 
       if (parse_mode == DILLO_HTML_PARSE_MODE_STASH_AND_BODY)
@@ -1205,10 +1142,10 @@ static void Html_process_space(DilloHtml *html, const char *space,
    }
 }
 
-/**
+/*
  * Handles putting the word into its proper place
- *  - STASH and VERBATIM --> html->Stash
- *  - otherwise it goes through addText()
+ *  > STASH and VERBATIM --> html->Stash
+ *  > otherwise it goes through addText()
  *
  * Entities are parsed (or not) according to parse_mode.
  * 'word' is a '\0'-terminated string.
@@ -1218,13 +1155,6 @@ static void Html_process_word(DilloHtml *html, const char *word, int size)
    int i, j, start;
    char *Pword;
    DilloHtmlParseMode parse_mode = S_TOP(html)->parse_mode;
-
-   if (S_TOP(html)->display_none)
-      return;
-   if ((i = html->PrevWasHtmlClose ? 1 : html->PrevWasBodyClose ? 2 : 0)) {
-      BUG_MSG("Content after </%s> tag.", i == 1 ? "html" : "body");
-      html->PrevWasHtmlClose = html->PrevWasBodyClose = false;
-   }
 
    if (parse_mode == DILLO_HTML_PARSE_MODE_STASH ||
        parse_mode == DILLO_HTML_PARSE_MODE_STASH_AND_BODY) {
@@ -1241,7 +1171,7 @@ static void Html_process_word(DilloHtml *html, const char *word, int size)
       dStr_append_l(html->Stash, word, size);
    }
 
-   if (parse_mode == DILLO_HTML_PARSE_MODE_STASH ||
+   if (parse_mode == DILLO_HTML_PARSE_MODE_STASH  ||
        parse_mode == DILLO_HTML_PARSE_MODE_VERBATIM) {
       /* skip until the closing instructions */
 
@@ -1254,7 +1184,8 @@ static void Html_process_word(DilloHtml *html, const char *word, int size)
             Html_process_space(html, Pword + start, i - start);
          } else {
             while (Pword[++i] && !isspace(Pword[i])) ;
-            HT2TB(html)->addText(Pword + start, i - start, html->wordStyle ());
+            HT2TB(html)->addText(Pword + start, i - start,
+                                     html->styleEngine->wordStyle ());
             html->pre_column += i - start;
             html->PreFirstChar = false;
          }
@@ -1292,18 +1223,18 @@ static void Html_process_word(DilloHtml *html, const char *word, int size)
             Html_process_space(html, word2 + start, i - start);
          } else if (!strncmp(word2+i, utf8_zero_width_space, 3)) {
             i += 3;
-            HT2TB(html)->addBreakOption(html->wordStyle (), false);
          } else if (a_Utf8_ideographic(word2+i, beyond_word2, &len)) {
             i += len;
-            HT2TB(html)->addText(word2 + start, i - start, html->wordStyle ());
-            HT2TB(html)->addBreakOption(html->wordStyle (), false);
+            HT2TB(html)->addText(word2 + start, i - start,
+                                 html->styleEngine->wordStyle ());
          } else {
             do {
                i += len;
             } while (word2[i] && !isspace(word2[i]) &&
                      strncmp(word2+i, utf8_zero_width_space, 3) &&
                      (!a_Utf8_ideographic(word2+i, beyond_word2, &len)));
-            HT2TB(html)->addText(word2 + start, i - start, html->wordStyle ());
+            HT2TB(html)->addText(word2 + start, i - start,
+                                 html->styleEngine->wordStyle ());
          }
       }
       if (Pword == word2)
@@ -1311,7 +1242,7 @@ static void Html_process_word(DilloHtml *html, const char *word, int size)
    }
 }
 
-/**
+/*
  * Does the tag in tagstr (e.g. "p") match the tag in the tag, tagsize
  * structure, with the initial < skipped over (e.g. "P align=center>")?
  */
@@ -1320,7 +1251,7 @@ static bool Html_match_tag(const char *tagstr, char *tag, int tagsize)
    int i;
 
    for (i = 0; i < tagsize && tagstr[i] != '\0'; i++) {
-      if (D_ASCII_TOLOWER(tagstr[i]) != D_ASCII_TOLOWER(tag[i]))
+      if (tolower(tagstr[i]) != tolower(tag[i]))
          return false;
    }
    /* The test for '/' is for xml compatibility: "empty/>" will be matched. */
@@ -1329,7 +1260,7 @@ static bool Html_match_tag(const char *tagstr, char *tag, int tagsize)
    return false;
 }
 
-/**
+/*
  * This function is called after popping the stack, to
  * handle nested Textblock widgets.
  */
@@ -1337,13 +1268,13 @@ static void Html_eventually_pop_dw(DilloHtml *html, bool hand_over_break)
 {
    if (html->dw != S_TOP(html)->textblock) {
       if (hand_over_break)
-         HT2TB(html)->handOverBreak (html->style ());
+         HT2TB(html)->handOverBreak (html->styleEngine->style ());
       HT2TB(html)->flush ();
       html->dw = S_TOP(html)->textblock;
    }
 }
 
-/**
+/*
  * Push the tag (copying attributes from the top of the stack)
  */
 static void Html_push_tag(DilloHtml *html, int tag_idx)
@@ -1359,17 +1290,17 @@ static void Html_push_tag(DilloHtml *html, int tag_idx)
    html->dw = S_TOP(html)->textblock;
 }
 
-/**
- * Push the tag (used to force en element with optional open into the stack).
+/*
+ * Push the tag (used to force en element with optional open into the stack)
  * Note: now it's the same as Html_push_tag(), but things may change...
  */
 static void Html_force_push_tag(DilloHtml *html, int tag_idx)
 {
-   html->startElement (tag_idx);
+   html->styleEngine->startElement (tag_idx);
    Html_push_tag(html, tag_idx);
 }
 
-/**
+/*
  * Pop the top tag in the stack
  */
 static void Html_real_pop_tag(DilloHtml *html)
@@ -1382,7 +1313,71 @@ static void Html_real_pop_tag(DilloHtml *html)
    Html_eventually_pop_dw(html, hand_over_break);
 }
 
+/*
+ * Cleanup the stack to a given index.
+ */
+static void Html_tag_cleanup_to_idx(DilloHtml *html, int idx)
+{
+   int s_sz;
+   while ((s_sz = html->stack->size()) > idx) {
+      int toptag_idx = S_TOP(html)->tag_idx;
+      TagInfo toptag = Tags[toptag_idx];
+      if (s_sz > idx + 1 && toptag.EndTag != 'O')
+         BUG_MSG("  - forcing close of open tag: <%s>\n", toptag.name);
+      _MSG("Close: %*s%s\n", size," ", toptag.name);
+      toptag.close(html, toptag_idx);
+      Html_real_pop_tag(html);
+   }
+}
 
+/*
+ * Default close function for tags.
+ * (conditional cleanup of the stack)
+ * There are several ways of doing it. Considering the HTML 4.01 spec
+ * which defines optional close tags, and the will to deliver useful diagnose
+ * messages for bad-formed HTML, it'll go as follows:
+ *   1.- Search the stack for the first tag that requires a close tag.
+ *   2.- If it matches, clean all the optional-close tags in between.
+ *   3.- Cleanup the matching tag. (on error, give a warning message)
+ *
+ * If 'w3c_mode' is NOT enabled:
+ *   1.- Search the stack for a matching tag based on tag level.
+ *   2.- If it exists, clean all the tags in between.
+ *   3.- Cleanup the matching tag. (on error, give a warning message)
+ */
+static void Html_tag_cleanup_at_close(DilloHtml *html, int new_idx)
+{
+   int w3c_mode = !prefs.w3c_plus_heuristics;
+   int stack_idx, tag_idx, matched = 0, expected = 0;
+   TagInfo new_tag = Tags[new_idx];
+
+   /* Look for the candidate tag to close */
+   stack_idx = html->stack->size();
+   while (--stack_idx) {
+      tag_idx = html->stack->getRef(stack_idx)->tag_idx;
+      if (tag_idx == new_idx) {
+         /* matching tag found */
+         matched = 1;
+         break;
+      } else if (Tags[tag_idx].EndTag == 'O') {
+         /* skip an optional tag */
+         continue;
+      } else if (w3c_mode || Tags[tag_idx].TagLevel >= new_tag.TagLevel) {
+         /* this is the tag that should have been closed */
+         expected = 1;
+         break;
+      }
+   }
+
+   if (matched) {
+      Html_tag_cleanup_to_idx(html, stack_idx);
+   } else if (expected) {
+      BUG_MSG("unexpected closing tag: </%s> -- expected </%s>.\n",
+              new_tag.name, Tags[tag_idx].name);
+   } else {
+      BUG_MSG("unexpected closing tag: </%s>.\n", new_tag.name);
+   }
+}
 
 /*
  * Some parsing routines.
@@ -1426,7 +1421,7 @@ static CssLength Html_parse_length_or_multi_length (const char *attr,
 }
 
 
-/**
+/*
  * Returns a length or a percentage, or UNDEF_LENGTH in case
  * of an error, or if attr is NULL.
  */
@@ -1442,7 +1437,7 @@ CssLength a_Html_parse_length (DilloHtml *html, const char *attr)
    else {
       /* allow only whitespaces */
       if (*end && !isspace (*end)) {
-         BUG_MSG("Garbage after length: '%s'.", attr);
+         BUG_MSG("Garbage after length: %s\n", attr);
          l = CSS_CREATE_LENGTH(0.0, CSS_LENGTH_TYPE_AUTO);
       }
    }
@@ -1451,54 +1446,44 @@ CssLength a_Html_parse_length (DilloHtml *html, const char *attr)
    return l;
 }
 
-/**
+/*
  * Parse a color attribute.
  * Return value: parsed color, or default_color (+ error msg) on error.
  */
-int32_t a_Html_color_parse(DilloHtml *html, const char *str,
-                           int32_t default_color)
+int32_t a_Html_color_parse(DilloHtml *html,
+                           const char *subtag, int32_t default_color)
 {
    int err = 1;
-   int32_t color = a_Color_parse(str, default_color, &err);
+   int32_t color = a_Color_parse(subtag, default_color, &err);
 
    if (err) {
-      BUG_MSG("Color \"%s\" is not in \"#RRGGBB\" format.", str);
+      BUG_MSG("color is not in \"#RRGGBB\" format\n");
    }
    return color;
 }
 
-/**
- * Check that 'val' is composed of characters inside [A-Za-z0-9:_.-].
+/*
+ * Check that 'val' is composed of characters inside [A-Za-z0-9:_.-]
  * Note: ID can't have entities, but this check is enough (no '&').
  * Return value: 1 if OK, 0 otherwise.
  */
 static int
  Html_check_name_val(DilloHtml *html, const char *val, const char *attrname)
 {
-   if (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f) {
-      bool valid = *val && !strchr(val, ' ');
+   int i;
 
-      if (!valid) {
-         BUG_MSG("'%s' value \"%s\" must not be empty and must not contain "
-                 "spaces.", attrname, val);
-      }
-      return valid ? 1 : 0;
-   } else {
-      int i;
+   for (i = 0; val[i]; ++i)
+      if (!(isalnum(val[i]) || strchr(":_.-", val[i])))
+         break;
 
-      for (i = 0; val[i]; ++i)
-         if (!d_isascii(val[i]) || !(isalnum(val[i]) || strchr(":_.-", val[i])))
-            break;
+   if (val[i] || !isalpha(val[0]))
+      BUG_MSG("'%s' value is not of the form "
+              "[A-Za-z][A-Za-z0-9:_.-]*\n", attrname);
 
-      if (val[i] || !(d_isascii(val[0]) && isalpha(val[0])))
-         BUG_MSG("%s attribute value \"%s\" is not of the form "
-                 "'[A-Za-z][A-Za-z0-9:_.-]*'.", attrname, val);
-
-      return !(val[i]);
-   }
+   return !(val[i]);
 }
 
-/**
+/*
  * Handle DOCTYPE declaration
  *
  * Follows the convention that HTML 4.01
@@ -1513,14 +1498,15 @@ static int
  * rendering modes, so it may be better to chose another behaviour. --Jcid
  *
  * http://www.mozilla.org/docs/web-developer/quirks/doctypes.html
- * http://lists.dillo.org/pipermail/dillo-dev/2004-October/002300.html
+ * http://lists.auriga.wearlab.de/pipermail/dillo-dev/2004-October/002300.html
  *
  * This is not a full DOCTYPE parser, just enough for what Dillo uses.
  */
 static void Html_parse_doctype(DilloHtml *html, const char *tag, int tagsize)
 {
    static const char HTML_SGML_sig [] = "<!DOCTYPE HTML PUBLIC ";
-   static const char HTML20     [] = "-//IETF//DTD HTML";
+   static const char HTML5_sig  [] = "<!DOCTYPE html>";
+   static const char HTML20     [] = "-//IETF//DTD HTML 2.0";
    static const char HTML32     [] = "-//W3C//DTD HTML 3.2";
    static const char HTML40     [] = "-//W3C//DTD HTML 4.0";
    static const char HTML401    [] = "-//W3C//DTD HTML 4.01";
@@ -1530,8 +1516,7 @@ static void Html_parse_doctype(DilloHtml *html, const char *tag, int tagsize)
    static const char XHTML11    [] = "-//W3C//DTD XHTML 1.1";
    static const char XHTML11_url[] = "http://www.w3.org/TR/xhtml11/DTD/";
 
-   size_t i;
-   int quote;
+   int i, quote;
    char *p, *ntag = dStrndup(tag, tagsize);
 
    /* Tag sanitization: Collapse whitespace between tokens
@@ -1555,23 +1540,19 @@ static void Html_parse_doctype(DilloHtml *html, const char *tag, int tagsize)
 
    _MSG("New: {%s}\n", ntag);
 
-   if (html->DocType != DT_NONE)
-      BUG_MSG("Multiple DOCTYPE declarations.");
-
    /* The default DT_NONE type is TagSoup */
-   if (i > strlen(HTML_SGML_sig) && // avoid out of bounds reads!
-       !dStrnAsciiCasecmp(ntag, HTML_SGML_sig, strlen(HTML_SGML_sig))) {
+   if (!dStrncasecmp(ntag, HTML_SGML_sig, strlen(HTML_SGML_sig))) {
       p = ntag + strlen(HTML_SGML_sig) + 1;
       if (!strncmp(p, HTML401, strlen(HTML401)) &&
-          dStriAsciiStr(p + strlen(HTML401), HTML401_url)) {
+          dStristr(p + strlen(HTML401), HTML401_url)) {
          html->DocType = DT_HTML;
          html->DocTypeVersion = 4.01f;
       } else if (!strncmp(p, XHTML1, strlen(XHTML1)) &&
-                 dStriAsciiStr(p + strlen(XHTML1), XHTML1_url)) {
+                 dStristr(p + strlen(XHTML1), XHTML1_url)) {
          html->DocType = DT_XHTML;
          html->DocTypeVersion = 1.0f;
       } else if (!strncmp(p, XHTML11, strlen(XHTML11)) &&
-                 dStriAsciiStr(p + strlen(XHTML11), XHTML11_url)) {
+                 dStristr(p + strlen(XHTML11), XHTML11_url)) {
          html->DocType = DT_XHTML;
          html->DocTypeVersion = 1.1f;
       } else if (!strncmp(p, HTML40, strlen(HTML40))) {
@@ -1584,142 +1565,110 @@ static void Html_parse_doctype(DilloHtml *html, const char *tag, int tagsize)
          html->DocType = DT_HTML;
          html->DocTypeVersion = 2.0f;
       }
-   } else if (!dStrAsciiCasecmp(ntag, "<!DOCTYPE html>") ||
-              !dStrAsciiCasecmp(ntag, "<!DOCTYPE html >") ||
-              !dStrAsciiCasecmp(ntag,
-                           "<!DOCTYPE html SYSTEM \"about:legacy-compat\">") ||
-              !dStrAsciiCasecmp(ntag,
-                             "<!DOCTYPE html SYSTEM 'about:legacy-compat'>")) {
+   } else if (!dStrcasecmp(ntag, HTML5_sig)) {
+      BUG_MSG("Document follows HTML5 working draft; treating as HTML4.\n");
       html->DocType = DT_HTML;
       html->DocTypeVersion = 5.0f;
    }
-   if (html->DocType == DT_NONE) {
-      html->DocType = DT_UNRECOGNIZED;
-      BUG_MSG("DOCTYPE not recognized: ('%s').", ntag);
-   }
+
    dFree(ntag);
 }
 
-/**
+/*
  * Handle open HTML element
  */
 static void Html_tag_open_html(DilloHtml *html, const char *tag, int tagsize)
 {
-   /* The IN_HTML flag will be kept set until at IN_EOF condition.
-    * This allows to handle pages with multiple or uneven HTML tags */
-
    if (!(html->InFlags & IN_HTML))
       html->InFlags |= IN_HTML;
-   if (html->Num_HTML < UCHAR_MAX)
-      ++html->Num_HTML;
+   ++html->Num_HTML;
 
    if (html->Num_HTML > 1) {
-      BUG_MSG("<html> was already open.");
-      html->ReqTagClose = true;
+      BUG_MSG("HTML element was already open\n");
    }
 }
 
-/**
- * Handle close HTML element.
+/*
+ * Handle close HTML element
  */
-static void Html_tag_close_html(DilloHtml *html)
+static void Html_tag_close_html(DilloHtml *html, int TagIdx)
 {
-   _MSG("Html_tag_close_html: Num_HTML=%d\n", html->Num_HTML);
-
-  /* As some Tag soup pages use multiple HTML tags, this function
-   * gets called only on EOF and upon and extra HTML open.
-   * Also, we defer clearing the IN_HTML flag until IN_EOF */
+   /* TODO: may add some checks here */
+   if (html->Num_HTML == 1) {
+      /* beware of pages with multiple HTML close tags... :-P */
+      html->InFlags &= ~IN_HTML;
+   }
 }
 
-/**
- * Handle open HEAD element.
+/*
+ * Handle open HEAD element
  */
 static void Html_tag_open_head(DilloHtml *html, const char *tag, int tagsize)
 {
-   if (html->InFlags & IN_BODY) {
-      BUG_MSG("<head> must go before the BODY section.");
+   if (html->InFlags & IN_BODY || html->Num_BODY > 0) {
+      BUG_MSG("HEAD element must go before the BODY section\n");
       html->ReqTagClose = true;
       return;
    }
 
-   if (html->Num_HEAD < UCHAR_MAX)
-      ++html->Num_HEAD;
-   if (html->InFlags & IN_HEAD) {
-      BUG_MSG("<head> was already open.");
-      html->ReqTagClose = true;
-   } else if (html->Num_HEAD > 1) {
-      BUG_MSG("<head> already finished -- ignoring.");
-      html->ReqTagClose = true;
-   } else {
+   if (!(html->InFlags & IN_HEAD))
       html->InFlags |= IN_HEAD;
+   ++html->Num_HEAD;
+
+   if (html->Num_HEAD > 1) {
+      BUG_MSG("HEAD element was already open\n");
    }
 }
 
-/**
- * Handle close HEAD element.
- * Note: HEAD is parsed once completely got.
+/*
+ * Handle close HEAD element
+ * Note: as a side effect of Html_test_section() this function is called
+ *       twice when the head element is closed implicitly.
+ * Note2: HEAD is parsed once completely got.
  */
-static void Html_tag_close_head(DilloHtml *html)
+static void Html_tag_close_head(DilloHtml *html, int TagIdx)
 {
    if (html->InFlags & IN_HEAD) {
-      if (html->Num_HEAD == 1) {
-         /* match for the well formed start of HEAD section */
-         if (html->Num_TITLE == 0)
-            BUG_MSG("<head> lacks <title>.");
+      _MSG("Closing HEAD section\n");
+      if (html->Num_TITLE == 0)
+         BUG_MSG("HEAD section lacks the TITLE element\n");
 
-         html->InFlags &= ~IN_HEAD;
+      html->InFlags &= ~IN_HEAD;
 
-         /* charset is already set, load remote stylesheets now */
-         for (int i = 0; i < html->cssUrls->size(); i++) {
-            a_Html_load_stylesheet(html, html->cssUrls->get(i));
-         }
-      } else if (html->Num_HEAD > 1) {
-         --html->Num_HEAD;
+      /* charset is already set, load remote stylesheets now */
+      for (int i = 0; i < html->cssUrls->size(); i++) {
+         a_Html_load_stylesheet(html, html->cssUrls->get(i));
       }
-   } else {
-      /* not reached, see Html_tag_cleanup_at_close() */
    }
 }
 
-/**
- * Handle open TITLE.
+/*
+ * Handle open TITLE
  * calls stash init, where the title string will be stored
  */
 static void Html_tag_open_title(DilloHtml *html, const char *tag, int tagsize)
 {
-   /* fill the stash buffer so TITLE content can be ignored
-    * when not valid, redundant or outside HEAD section */
+   ++html->Num_TITLE;
    a_Html_stash_init(html);
-
-   if (html->InFlags & IN_HEAD) {
-      if (html->Num_TITLE < UCHAR_MAX)
-         ++html->Num_TITLE;
-      if (html->Num_TITLE > 1)
-         BUG_MSG("Redundant <title>.");
-   } else {
-      BUG_MSG("<title> must be inside <head> -- ignoring.");
-   }
 }
 
-/**
- * Handle close TITLE.
+/*
+ * Handle close TITLE
  * set page-title in the browser window and in the history.
  */
-static void Html_tag_close_title(DilloHtml *html)
+static void Html_tag_close_title(DilloHtml *html, int TagIdx)
 {
-   /* title is only valid inside HEAD */
-   if (html->InFlags & IN_HEAD && html->Num_TITLE == 1) {
-      /* Ignore empty titles: <title></title> */
-      char *title = html->Stash->str;
-      if (!title || title[0] == '\0')
-         return;
-      a_UIcmd_set_page_title(html->bw, title);
-      a_History_set_title_by_url(html->page_url, title);
+   if (html->InFlags & IN_HEAD) {
+      /* title is only valid inside HEAD */
+      a_UIcmd_set_page_title(html->bw, html->Stash->str);
+      a_History_set_title_by_url(html->page_url, html->Stash->str);
+   } else {
+      BUG_MSG("the TITLE element must be inside the HEAD section\n");
    }
 }
 
-/**
- * Handle open SCRIPT.
+/*
+ * Handle open SCRIPT
  * initializes stash, where the embedded code will be stored.
  * MODE_VERBATIM is used because MODE_STASH catches entities.
  */
@@ -1729,16 +1678,16 @@ static void Html_tag_open_script(DilloHtml *html, const char *tag, int tagsize)
    S_TOP(html)->parse_mode = DILLO_HTML_PARSE_MODE_VERBATIM;
 }
 
-/**
+/*
  * Handle close SCRIPT
  */
-static void Html_tag_close_script(DilloHtml *html)
+static void Html_tag_close_script(DilloHtml *html, int TagIdx)
 {
    /* eventually the stash will be sent to an interpreter for parsing */
 }
 
-/**
- * Handle open STYLE.
+/*
+ * Handle open STYLE
  * Store contents in the stash where the style sheet interpreter can get it.
  */
 static void Html_tag_open_style(DilloHtml *html, const char *tag, int tagsize)
@@ -1748,13 +1697,12 @@ static void Html_tag_open_style(DilloHtml *html, const char *tag, int tagsize)
    html->loadCssFromStash = true;
 
    if (!(attrbuf = a_Html_get_attr(html, tag, tagsize, "type"))) {
-      if (html->DocType != DT_HTML || html->DocTypeVersion <= 4.01f)
-         BUG_MSG("<style> requires type attribute.");
-   } else if (dStrAsciiCasecmp(attrbuf, "text/css")) {
+      BUG_MSG("type attribute is required for <style>\n");
+   } else if (dStrcasecmp(attrbuf, "text/css")) {
       html->loadCssFromStash = false;
    }
    if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "media")) &&
-       dStrAsciiCasecmp(attrbuf, "all") && !dStriAsciiStr(attrbuf, "screen")) {
+       dStrcasecmp(attrbuf, "all") && !dStristr(attrbuf, "screen")) {
       /* HTML 4.01 sec. 6.13 says that media descriptors are case-sensitive,
        * but sec. 14.2.3 says that the attribute is case-insensitive.
        * TODO can be a comma-separated list.
@@ -1767,14 +1715,14 @@ static void Html_tag_open_style(DilloHtml *html, const char *tag, int tagsize)
    S_TOP(html)->parse_mode = DILLO_HTML_PARSE_MODE_VERBATIM;
 }
 
-/**
- * Handle close STYLE.
+/*
+ * Handle close STYLE
  */
-static void Html_tag_close_style(DilloHtml *html)
+static void Html_tag_close_style(DilloHtml *html, int TagIdx)
 {
    if (prefs.parse_embedded_css && html->loadCssFromStash)
-      html->styleEngine->parse(html, html->base_url, html->Stash->str,
-                               html->Stash->len, CSS_ORIGIN_AUTHOR);
+      html->styleEngine->parse(html, NULL, html->Stash->str, html->Stash->len,
+                               CSS_ORIGIN_AUTHOR);
 }
 
 /*
@@ -1784,35 +1732,24 @@ static void Html_tag_open_body(DilloHtml *html, const char *tag, int tagsize)
 {
    const char *attrbuf;
    int32_t color;
+   int tag_index_a = a_Html_tag_index ("a");
    style::Color *bgColor;
-   style::StyleImage *bgImage;
-   style::BackgroundRepeat bgRepeat;
-   style::BackgroundAttachment bgAttachment;
-   style::Length bgPositionX, bgPositionY;
 
-   _MSG("Html_tag_open_body Num_BODY=%d\n", html->Num_BODY);
    if (!(html->InFlags & IN_BODY))
       html->InFlags |= IN_BODY;
-   if (html->Num_BODY < UCHAR_MAX)
-      ++html->Num_BODY;
+   ++html->Num_BODY;
 
    if (html->Num_BODY > 1) {
-      BUG_MSG("<body> was already open.");
-      html->ReqTagClose = true;
+      BUG_MSG("BODY element was already open\n");
       return;
    }
-
    if (html->InFlags & IN_HEAD) {
       /* if we're here, it's bad XHTML, no need to recover */
-      BUG_MSG("Unclosed <head>.");
+      BUG_MSG("unclosed HEAD element\n");
    }
 
    if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "bgcolor"))) {
       color = a_Html_color_parse(html, attrbuf, -1);
-
-      if (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)
-         BUG_MSG("<body> bgcolor attribute is obsolete.");
-
       if (color != -1)
          html->styleEngine->setNonCssHint (CSS_PROPERTY_BACKGROUND_COLOR,
                                            CSS_TYPE_COLOR, color);
@@ -1820,40 +1757,25 @@ static void Html_tag_open_body(DilloHtml *html, const char *tag, int tagsize)
 
    if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "text"))) {
       color = a_Html_color_parse(html, attrbuf, -1);
-
-      if (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)
-         BUG_MSG("<body> text attribute is obsolete.");
-
       if (color != -1)
          html->styleEngine->setNonCssHint (CSS_PROPERTY_COLOR,
                                            CSS_TYPE_COLOR, color);
    }
 
-   html->restyle ();
+   html->styleEngine->restyle ();
 
-   if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "link"))) {
+   if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "link")))
       html->non_css_link_color = a_Html_color_parse(html, attrbuf, -1);
-      if (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)
-         BUG_MSG("<body> link attribute is obsolete.");
-   }
 
-   if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "vlink"))) {
+   if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "vlink")))
       html->non_css_visited_color = a_Html_color_parse(html, attrbuf, -1);
-      if (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)
-         BUG_MSG("<body> vlink attribute is obsolete.");
-   }
 
-   html->dw->setStyle (html->style ());
+   html->dw->setStyle (html->styleEngine->style ());
 
    bgColor = html->styleEngine->backgroundColor ();
+
    if (bgColor)
       HT2LT(html)->setBgColor(bgColor);
-
-   bgImage = html->styleEngine->backgroundImage (&bgRepeat, &bgAttachment,
-                                                 &bgPositionX, &bgPositionY);
-   if (bgImage)
-      HT2LT(html)->setBgImage(bgImage, bgRepeat, bgAttachment, bgPositionX,
-                              bgPositionY);
 
    /* Determine a color for visited links.
     * This color is computed once per page and used for immediate feedback
@@ -1861,22 +1783,22 @@ static void Html_tag_open_body(DilloHtml *html, const char *tag, int tagsize)
     * On reload style including color for visited links is computed properly
     * according to CSS.
     */
-   html->startElement (i_A);
+   html->styleEngine->startElement (tag_index_a);
    html->styleEngine->setPseudoVisited ();
    if (html->non_css_visited_color != -1) {
       html->styleEngine->setNonCssHint (CSS_PROPERTY_COLOR, CSS_TYPE_COLOR,
                                         html->non_css_visited_color);
    }
-   html->visited_color = html->style ()->color->getColor ();
-   html->styleEngine->endElement (i_A);
+   html->visited_color = html->styleEngine->style ()->color->getColor ();
+   html->styleEngine->endElement (tag_index_a);
 
    if (prefs.contrast_visited_color) {
       /* get a color that has a "safe distance" from text, link and bg */
       html->visited_color =
          a_Color_vc(html->visited_color,
-            html->style ()->color->getColor(),
+            html->styleEngine->style ()->color->getColor(),
             html->non_css_link_color,
-            html->backgroundStyle()->backgroundColor->getColor());
+            html->styleEngine->backgroundStyle()->backgroundColor->getColor());
    }
 
 
@@ -1886,13 +1808,12 @@ static void Html_tag_open_body(DilloHtml *html, const char *tag, int tagsize)
 /*
  * BODY
  */
-static void Html_tag_close_body(DilloHtml *html)
+static void Html_tag_close_body(DilloHtml *html, int TagIdx)
 {
-   _MSG("Html_tag_close_body: Num_BODY=%d\n", html->Num_BODY);
-
-  /* As some Tag soup pages use multiple BODY tags, this function
-   * gets called only on EOF and upon and extra BODY open.
-   * Also, we defer clearing the IN_BODY flag until IN_EOF */
+   if (html->Num_BODY == 1) {
+      /* some tag soup pages use multiple BODY tags... */
+      html->InFlags &= ~IN_BODY;
+   }
 }
 
 /*
@@ -1905,6 +1826,8 @@ static void Html_tag_open_p(DilloHtml *html, const char *tag, int tagsize)
    CssPropertyList props;
 
    a_Html_tag_set_align_attr (html, tag, tagsize);
+   html->styleEngine->inheritBackgroundColor ();
+   HT2TB(html)->addParbreak (9, html->styleEngine->wordStyle ());
 }
 
 /*
@@ -1915,14 +1838,21 @@ static void Html_tag_open_p(DilloHtml *html, const char *tag, int tagsize)
 static void Html_tag_open_frame (DilloHtml *html, const char *tag, int tagsize)
 {
    const char *attrbuf;
+   char *src;
    DilloUrl *url;
+   Textblock *textblock;
+   Widget *bullet;
    CssPropertyList props;
+
+   textblock = HT2TB(html);
 
    if (!(attrbuf = a_Html_get_attr(html, tag, tagsize, "src")))
       return;
 
    if (!(url = a_Html_url_new(html, attrbuf, NULL, 0)))
       return;
+
+   src = dStrdup(attrbuf);
 
    if (a_Capi_get_flags_with_redirection(url) & CAPI_IsCached) {
       /* visited frame */
@@ -1934,45 +1864,29 @@ static void Html_tag_open_frame (DilloHtml *html, const char *tag, int tagsize)
 
    html->styleEngine->setNonCssHint (PROPERTY_X_LINK, CSS_TYPE_INTEGER,
                                      Html_set_new_link(html,&url));
-}
 
-static void
- Html_tag_content_frame (DilloHtml *html, const char *tag, int tagsize)
-{
-   const char *attrbuf;
-   char *src;
-   Textblock *textblock;
-   Widget *bullet;
-
-   textblock = HT2TB(html);
-
-   if (!(attrbuf = a_Html_get_attr(html, tag, tagsize, "src")))
-      return;
-
-   src = dStrdup(attrbuf);
-
-   textblock->addParbreak (5, html->wordStyle ());
+   textblock->addParbreak (5, html->styleEngine->wordStyle ());
 
    bullet = new Bullet();
-   textblock->addWidget(bullet, html->wordStyle ());
-   textblock->addSpace(html->wordStyle ());
+   textblock->addWidget(bullet, html->styleEngine->wordStyle ());
+   textblock->addSpace(html->styleEngine->wordStyle ());
 
-   if (D_ASCII_TOLOWER(tag[1]) == 'i') {
+   if (tolower(tag[1]) == 'i') {
       /* IFRAME usually comes with very long advertising/spying URLS,
        * to not break rendering we will force name="IFRAME" */
-      textblock->addText ("IFRAME", html->wordStyle ());
+      textblock->addText ("IFRAME", html->styleEngine->wordStyle ());
 
    } else {
       /* FRAME:
        * If 'name' tag is present use it, if not use 'src' value */
       if (!(attrbuf = a_Html_get_attr(html, tag, tagsize, "name"))) {
-         textblock->addText (src, html->wordStyle ());
+         textblock->addText (src, html->styleEngine->wordStyle ());
       } else {
-         textblock->addText (attrbuf, html->wordStyle ());
+         textblock->addText (attrbuf, html->styleEngine->wordStyle ());
       }
    }
 
-   textblock->addParbreak (5, html->wordStyle ());
+   textblock->addParbreak (5, html->styleEngine->wordStyle ());
 
    dFree(src);
 }
@@ -1982,12 +1896,12 @@ static void
  * TODO: This is just a temporary fix while real frame support
  *       isn't finished. Imitates lynx/w3m's frames.
  */
-static void Html_tag_content_frameset (DilloHtml *html,
+static void Html_tag_open_frameset (DilloHtml *html,
                                     const char *tag, int tagsize)
 {
-   HT2TB(html)->addParbreak (9, html->wordStyle ());
-   HT2TB(html)->addText("--FRAME--", html->wordStyle ());
-   Html_add_textblock(html, true, 5, false);
+   HT2TB(html)->addParbreak (9, html->styleEngine->wordStyle ());
+   HT2TB(html)->addText("--FRAME--", html->styleEngine->wordStyle ());
+   Html_add_textblock(html, 5);
 }
 
 /*
@@ -1995,7 +1909,10 @@ static void Html_tag_content_frameset (DilloHtml *html,
  */
 static void Html_tag_open_h(DilloHtml *html, const char *tag, int tagsize)
 {
+   html->styleEngine->inheritBackgroundColor ();
    a_Html_tag_set_align_attr (html, tag, tagsize);
+
+   HT2TB(html)->addParbreak (9, html->styleEngine->wordStyle ());
 
    a_Html_stash_init(html);
    S_TOP(html)->parse_mode =
@@ -2005,9 +1922,9 @@ static void Html_tag_open_h(DilloHtml *html, const char *tag, int tagsize)
 /*
  * <BR>
  */
-static void Html_tag_content_br(DilloHtml *html, const char *tag, int tagsize)
+static void Html_tag_open_br(DilloHtml *html, const char *tag, int tagsize)
 {
-   HT2TB(html)->addLinebreak (html->wordStyle ());
+   HT2TB(html)->addLinebreak (html->styleEngine->wordStyle ());
 }
 
 /*
@@ -2057,21 +1974,56 @@ static void Html_tag_open_abbr(DilloHtml *html, const char *tag, int tagsize)
    }
 }
 
-/**
+/*
+ * <CENTER>
+ */
+static void Html_tag_open_center(DilloHtml *html, const char *tag, int tagsize)
+{
+   html->styleEngine->inheritBackgroundColor ();
+   HT2TB(html)->addParbreak (0, html->styleEngine->wordStyle ());
+}
+
+/*
+ * </CENTER>, also used for </TABLE>
+ */
+static void Html_tag_close_center(DilloHtml *html, int TagIdx)
+{
+   HT2TB(html)->addParbreak (0, html->styleEngine->wordStyle ());
+}
+
+/*
+ * <ADDRESS>
+ */
+static void Html_tag_open_address(DilloHtml *html,
+                                  const char *tag, int tagsize)
+{
+   html->styleEngine->inheritBackgroundColor ();
+   HT2TB(html)->addParbreak (9, html->styleEngine->wordStyle ());
+}
+
+/*
  * Read image-associated tag attributes and create new image.
  */
-void a_Html_common_image_attrs(DilloHtml *html, const char *tag, int tagsize)
+DilloImage *a_Html_image_new(DilloHtml *html, const char *tag,
+                             int tagsize, DilloUrl *url)
 {
-   char *width_ptr, *height_ptr;
+   DilloImage *Image;
+   char *width_ptr, *height_ptr, *alt_ptr;
    const char *attrbuf;
-   CssLength l_w = CSS_CREATE_LENGTH(0.0, CSS_LENGTH_TYPE_AUTO);
-   CssLength l_h = CSS_CREATE_LENGTH(0.0, CSS_LENGTH_TYPE_AUTO);
-   int w = 0, h = 0;
+   CssLength l_w  = CSS_CREATE_LENGTH(0.0, CSS_LENGTH_TYPE_AUTO);
+   CssLength l_h  = CSS_CREATE_LENGTH(0.0, CSS_LENGTH_TYPE_AUTO);
+   int space, border, w = 0, h = 0;
+   bool load_now;
 
    if (prefs.show_tooltip &&
        (attrbuf = a_Html_get_attr(html, tag, tagsize, "title"))) {
       html->styleEngine->setNonCssHint(PROPERTY_X_TOOLTIP, CSS_TYPE_STRING,
                                        attrbuf);
+   }
+   alt_ptr = a_Html_get_attr_wdef(html, tag, tagsize, "alt", NULL);
+   if ((!alt_ptr || !*alt_ptr) && !prefs.load_images) {
+      dFree(alt_ptr);
+      alt_ptr = dStrdup("[IMG]"); // Place holder for img_off mode
    }
    width_ptr = a_Html_get_attr_wdef(html, tag, tagsize, "width", NULL);
    height_ptr = a_Html_get_attr_wdef(html, tag, tagsize, "height", NULL);
@@ -2098,12 +2050,11 @@ void a_Html_common_image_attrs(DilloHtml *html, const char *tag, int tagsize)
     */
    if (w < 0 || h < 0 ||
        w > IMAGE_MAX_AREA || h > IMAGE_MAX_AREA ||
-       (h > 0 && w > IMAGE_MAX_AREA / h)) {
+       (h > 0 &&  w > IMAGE_MAX_AREA / h)) {
       dFree(width_ptr);
       dFree(height_ptr);
       width_ptr = height_ptr = NULL;
-      MSG("a_Html_common_image_attrs: suspicious image size request %d x %d\n",
-          w, h);
+      MSG("a_Html_image_new: suspicious image size request %d x %d\n", w, h);
    } else {
       if (CSS_LENGTH_TYPE(l_w) != CSS_LENGTH_TYPE_AUTO)
          html->styleEngine->setNonCssHint (CSS_PROPERTY_WIDTH,
@@ -2120,117 +2071,27 @@ void a_Html_common_image_attrs(DilloHtml *html, const char *tag, int tagsize)
       [...]
    */
 
-   /* x_img is an index to a list of {url,image} pairs.
-    * We know a_Html_image_new() will use size() as its next index */
-   html->styleEngine->setNonCssHint (PROPERTY_X_IMG, CSS_TYPE_INTEGER,
-                                     html->images->size());
-
-
-   dFree(width_ptr);
-   dFree(height_ptr);
-}
-
-DilloImage *a_Html_image_new(DilloHtml *html, const char *tag, int tagsize)
-{
-   bool load_now;
-   char *alt_ptr;
-   const char *attrbuf;
-   DilloUrl *url;
-   DilloImage *image;
-
-   if (!(attrbuf = a_Html_get_attr(html, tag, tagsize, "src")) ||
-       !(url = a_Html_url_new(html, attrbuf, NULL, 0)))
-      return NULL;
-
-   alt_ptr = a_Html_get_attr_wdef(html, tag, tagsize, "alt", NULL);
-   if (!alt_ptr || !*alt_ptr) {
-      dFree(alt_ptr);
-      alt_ptr = dStrdup("[IMG]");
-   }
-
-   dw::Image *dw = new dw::Image(alt_ptr);
-   image =
-      a_Image_new(html->dw->getLayout(), (void*)(dw::core::ImgRenderer*)dw, 0, 0);
-   
-   a_Image_ref(image);
-
-   if (HT2TB(html)->getBgColor())
-      image->bg_color = HT2TB(html)->getBgColor()->getColor();
-
-   if (HT2TB(html)->getFgColor())
-      image->fg_color = HT2TB(html)->getFgColor()->getColor();
-
-   DilloHtmlImage *hi = dNew(DilloHtmlImage, 1);
-   hi->url = url;
-   html->images->increase();
-   html->images->set(html->images->size() - 1, hi);
-
-   load_now = prefs.load_images ||
-              !dStrAsciiCasecmp(URL_SCHEME(url), "data") ||
-              (a_Capi_get_flags_with_redirection(url) & CAPI_IsCached);
-
-   if (load_now && Html_load_image(html->bw, url, html->page_url, image)) {
-      // hi->image is NULL if dillo tries to load the image immediately
-      hi->image = NULL;
-      a_Image_unref(image);
-   } else {
-      // otherwise a reference is kept in html->images
-      hi->image = image;
-   }
-
-   dFree(alt_ptr);
-   return image;
-}
-
-/**
- * Tell cache to retrieve image
- */
-static bool Html_load_image(BrowserWindow *bw, DilloUrl *url,
-                            const DilloUrl *requester, DilloImage *Image)
-{
-   DilloWeb *Web;
-   int ClientKey;
-   /* Fill a Web structure for the cache query */
-   Web = a_Web_new(bw, url, requester);
-   Web->Image = Image;
-   a_Image_ref(Image);
-   Web->flags |= WEB_Image;
-   /* Request image data from the cache */
-   if ((ClientKey = a_Capi_open_url(Web, NULL, NULL)) != 0) {
-      a_Bw_add_client(bw, ClientKey, 0);
-      a_Bw_add_url(bw, url);
-   }
-   return ClientKey != 0;
-}
-
-static void Html_tag_open_img(DilloHtml *html, const char *tag, int tagsize)
-{
-   int border;
-   const char *attrbuf;
-
-   a_Html_common_image_attrs(html, tag, tagsize);
-
    /* Spacing to the left and right */
    if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "hspace"))) {
-      int space = strtol(attrbuf, NULL, 10);
+      space = strtol(attrbuf, NULL, 10);
       if (space > 0) {
-         CssLength len = CSS_CREATE_LENGTH(space, CSS_LENGTH_TYPE_PX);
+         space = CSS_CREATE_LENGTH(space, CSS_LENGTH_TYPE_PX);
          html->styleEngine->setNonCssHint (CSS_PROPERTY_MARGIN_LEFT,
-                                           CSS_TYPE_LENGTH_PERCENTAGE, len);
+                                           CSS_TYPE_LENGTH_PERCENTAGE, space);
          html->styleEngine->setNonCssHint (CSS_PROPERTY_MARGIN_RIGHT,
-                                           CSS_TYPE_LENGTH_PERCENTAGE, len);
+                                           CSS_TYPE_LENGTH_PERCENTAGE, space);
       }
    }
 
    /* Spacing at the top and bottom */
    if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "vspace"))) {
-      int space = strtol(attrbuf, NULL, 10);
+      space = strtol(attrbuf, NULL, 10);
       if (space > 0) {
-         CssLength len = CSS_CREATE_LENGTH(space, CSS_LENGTH_TYPE_PX);
+         space = CSS_CREATE_LENGTH(space, CSS_LENGTH_TYPE_PX);
          html->styleEngine->setNonCssHint (CSS_PROPERTY_MARGIN_TOP,
-                                           CSS_TYPE_LENGTH_PERCENTAGE, len);
+                                           CSS_TYPE_LENGTH_PERCENTAGE, space);
          html->styleEngine->setNonCssHint (CSS_PROPERTY_MARGIN_BOTTOM,
-                                           CSS_TYPE_LENGTH_PERCENTAGE, len);
+                                           CSS_TYPE_LENGTH_PERCENTAGE, space);
       }
    }
 
@@ -2238,15 +2099,15 @@ static void Html_tag_open_img(DilloHtml *html, const char *tag, int tagsize)
    if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "border"))) {
       border = strtol(attrbuf, NULL, 10);
       if (border >= 0) {
-         CssLength b = CSS_CREATE_LENGTH(border, CSS_LENGTH_TYPE_PX);
+         border = CSS_CREATE_LENGTH(border, CSS_LENGTH_TYPE_PX);
          html->styleEngine->setNonCssHint (CSS_PROPERTY_BORDER_TOP_WIDTH,
-                                           CSS_TYPE_LENGTH_PERCENTAGE, b);
+                                           CSS_TYPE_LENGTH_PERCENTAGE, border);
          html->styleEngine->setNonCssHint (CSS_PROPERTY_BORDER_BOTTOM_WIDTH,
-                                           CSS_TYPE_LENGTH_PERCENTAGE, b);
+                                           CSS_TYPE_LENGTH_PERCENTAGE, border);
          html->styleEngine->setNonCssHint (CSS_PROPERTY_BORDER_LEFT_WIDTH,
-                                           CSS_TYPE_LENGTH_PERCENTAGE, b);
+                                           CSS_TYPE_LENGTH_PERCENTAGE, border);
          html->styleEngine->setNonCssHint (CSS_PROPERTY_BORDER_RIGHT_WIDTH,
-                                           CSS_TYPE_LENGTH_PERCENTAGE, b);
+                                           CSS_TYPE_LENGTH_PERCENTAGE, border);
 
          html->styleEngine->setNonCssHint (CSS_PROPERTY_BORDER_TOP_STYLE,
                                            CSS_TYPE_ENUM, BORDER_SOLID);
@@ -2259,25 +2120,76 @@ static void Html_tag_open_img(DilloHtml *html, const char *tag, int tagsize)
       }
    }
 
+   /* x_img is an index to a list of {url,image} pairs.
+    * We know Html_add_new_htmlimage() will use size() as its next index */
+   html->styleEngine->setNonCssHint (PROPERTY_X_IMG, CSS_TYPE_INTEGER,
+                                     html->images->size());
+
+   /* Add a new image widget to this page */
+   Image = a_Image_new(alt_ptr, 0);
+   if (HT2TB(html)->getBgColor())
+      Image->bg_color = HT2TB(html)->getBgColor()->getColor();
+
+   load_now = prefs.load_images ||
+              !dStrcasecmp(URL_SCHEME(url), "data") ||
+              (a_Capi_get_flags_with_redirection(url) & CAPI_IsCached);
+   bool loading = false;
+   if (load_now)
+      loading = Html_load_image(html->bw, url, html->page_url, Image);
+   Html_add_new_htmlimage(html, &url, loading ? NULL : Image);
+
+   dFree(width_ptr);
+   dFree(height_ptr);
+   dFree(alt_ptr);
+   return Image;
 }
 
-/**
- * Create a new Image struct and request the image-url to the cache.
+/*
+ * Tell cache to retrieve image
+ */
+static bool Html_load_image(BrowserWindow *bw, DilloUrl *url,
+                            const DilloUrl *requester, DilloImage *Image)
+{
+   DilloWeb *Web;
+   int ClientKey;
+   /* Fill a Web structure for the cache query */
+   Web = a_Web_new(url, requester);
+   Web->bw = bw;
+   Web->Image = Image;
+   a_Image_ref(Image);
+   Web->flags |= WEB_Image;
+   /* Request image data from the cache */
+   if ((ClientKey = a_Capi_open_url(Web, NULL, NULL)) != 0) {
+      a_Bw_add_client(bw, ClientKey, 0);
+      a_Bw_add_url(bw, url);
+   }
+   return ClientKey != 0;
+}
+
+/*
+ * Create a new Image struct and request the image-url to the cache
  * (If it either hits or misses, is not relevant here; that's up to the
  *  cache functions)
  */
-static void Html_tag_content_img(DilloHtml *html, const char *tag, int tagsize)
+static void Html_tag_open_img(DilloHtml *html, const char *tag, int tagsize)
 {
    DilloImage *Image;
-   DilloUrl *usemap_url;
+   DilloUrl *url, *usemap_url;
    const char *attrbuf;
 
    /* This avoids loading images. Useful for viewing suspicious HTML email. */
    if (URL_FLAGS(html->base_url) & URL_SpamSafe)
       return;
 
-   Image = a_Html_image_new(html, tag, tagsize);
-   if (!Image)
+   /* Look for a longdesc attribute possibly containing
+    * an image URL. Many sites use this for 'lazy loading'. */
+   if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "longdesc"))
+       && (url = a_Html_url_new(html, attrbuf, NULL, 0)))
+      MSG("Html_tag_open_img: lazy loading %s\n", attrbuf);
+
+   /* Good, it's a normal image not using that annoying trick. */
+   else if (!(attrbuf = a_Html_get_attr(html, tag, tagsize, "src")) ||
+            !(url = a_Html_url_new(html, attrbuf, NULL, 0)))
       return;
 
    usemap_url = NULL;
@@ -2285,18 +2197,14 @@ static void Html_tag_content_img(DilloHtml *html, const char *tag, int tagsize)
       /* TODO: usemap URLs outside of the document are not used. */
       usemap_url = a_Html_url_new(html, attrbuf, NULL, 0);
 
-   // At this point, we know that Image->ir represents an image
-   // widget. Notice that the order of the casts matters, because of
-   // multiple inheritance.
-   dw::Image *dwi = (dw::Image*)(dw::core::ImgRenderer*)Image->img_rndr;
-   HT2TB(html)->addWidget(dwi, html->style());
-   HT2TB(html)->addBreakOption (html->style (), false);
+   Image = a_Html_image_new(html, tag, tagsize, url);
+   HT2TB(html)->addWidget((Widget*)Image->dw, html->styleEngine->style());
 
    /* Image maps */
    if (a_Html_get_attr(html, tag, tagsize, "ismap")) {
-      dwi->setIsMap();
+      ((::dw::Image*)Image->dw)->setIsMap();
       _MSG("  Html_tag_open_img: server-side map (ISMAP)\n");
-   } else if (html->style ()->x_link != -1 &&
+   } else if (html->styleEngine->style ()->x_link != -1 &&
               usemap_url == NULL) {
       /* For simple links, we have to suppress the "image_pressed" signal.
        * This is overridden for USEMAP images. */
@@ -2304,7 +2212,8 @@ static void Html_tag_content_img(DilloHtml *html, const char *tag, int tagsize)
    }
 
    if (usemap_url) {
-      dwi->setUseMap(&html->maps, new ::object::String(URL_STR(usemap_url)));
+      ((::dw::Image*)Image->dw)->setUseMap(&html->maps,
+                            new ::object::String(URL_STR(usemap_url)));
       a_Url_free (usemap_url);
    }
 }
@@ -2312,14 +2221,14 @@ static void Html_tag_content_img(DilloHtml *html, const char *tag, int tagsize)
 /*
  * <map>
  */
-static void Html_tag_content_map(DilloHtml *html, const char *tag, int tagsize)
+static void Html_tag_open_map(DilloHtml *html, const char *tag, int tagsize)
 {
    char *hash_name;
    const char *attrbuf;
    DilloUrl *url;
 
    if (html->InFlags & IN_MAP) {
-      BUG_MSG("Nested <map>.");
+      BUG_MSG("nested <map>\n");
    } else {
       if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "name"))) {
          html->InFlags |= IN_MAP;
@@ -2329,15 +2238,15 @@ static void Html_tag_content_map(DilloHtml *html, const char *tag, int tagsize)
          a_Url_free (url);
          dFree(hash_name);
       } else {
-         BUG_MSG("<map> requires name attribute.");
+         BUG_MSG("name attribute is required for <map>\n");
       }
    }
 }
 
-/**
- * Handle close <MAP>.
+/*
+ * Handle close <MAP>
  */
-static void Html_tag_close_map(DilloHtml *html)
+static void Html_tag_close_map(DilloHtml *html, int TagIdx)
 {
    /* This is a hack for the perhaps frivolous feature of drawing image map
     * shapes when there is no image to display. If this map is defined after
@@ -2347,19 +2256,13 @@ static void Html_tag_close_map(DilloHtml *html)
    for (int i = 0; i < html->images->size(); i++) {
       DilloImage *img = html->images->get(i)->image;
 
-      if (img) {
-         // At this point, we know that img->ir represents an image
-         // widget. (Really? Is this assumption safe?) Notice that the
-         // order of the casts matters, because of multiple
-         // inheritance.
-         dw::Image *dwi = (dw::Image*)(dw::core::ImgRenderer*)img->img_rndr;
-         dwi->forceMapRedraw();
-      }
+      if (img)
+         ((dw::Image*) img->dw)->forceMapRedraw();
    }
    html->InFlags &= ~IN_MAP;
 }
 
-/**
+/*
  * Read coords in a string, returning a vector of ints.
  */
 static
@@ -2381,7 +2284,7 @@ misc::SimpleVector<int> *Html_read_coords(DilloHtml *html, const char *str)
       if (!*newtail)
          break;
       if (*newtail != ',') {
-         BUG_MSG("<area> coords must be integers separated by commas.");
+         BUG_MSG("area coords must be integers separated by commas.\n");
       }
       tail = newtail + 1;
    }
@@ -2392,8 +2295,7 @@ misc::SimpleVector<int> *Html_read_coords(DilloHtml *html, const char *str)
 /*
  * <AREA>
  */
-static void
- Html_tag_content_area(DilloHtml *html, const char *tag, int tagsize)
+static void Html_tag_open_area(DilloHtml *html, const char *tag, int tagsize)
 {
    enum types {UNKNOWN, RECTANGLE, CIRCLE, POLYGON, BACKGROUND};
    types type;
@@ -2404,32 +2306,33 @@ static void
    Shape *shape = NULL;
 
    if (!(html->InFlags & IN_MAP)) {
-      BUG_MSG("<area> not inside <map>.");
+      BUG_MSG("<area> element not inside <map>\n");
       return;
    }
    attrbuf = a_Html_get_attr(html, tag, tagsize, "shape");
 
-   if (!attrbuf || !*attrbuf || !dStrAsciiCasecmp(attrbuf, "rect")) {
+   if (!attrbuf || !*attrbuf || !dStrcasecmp(attrbuf, "rect")) {
       /* the default shape is a rectangle */
       type = RECTANGLE;
-   } else if (dStrAsciiCasecmp(attrbuf, "default") == 0) {
+   } else if (dStrcasecmp(attrbuf, "default") == 0) {
       /* "default" is the background */
       type = BACKGROUND;
-   } else if (dStrAsciiCasecmp(attrbuf, "circle") == 0) {
+   } else if (dStrcasecmp(attrbuf, "circle") == 0) {
       type = CIRCLE;
-   } else if (dStrnAsciiCasecmp(attrbuf, "poly", 4) == 0) {
+   } else if (dStrncasecmp(attrbuf, "poly", 4) == 0) {
       type = POLYGON;
    } else {
-      BUG_MSG("<area> unknown shape: '%s'.", attrbuf);
+      BUG_MSG("<area> unknown shape: \"%s\"\n", attrbuf);
       type = UNKNOWN;
    }
    if (type == RECTANGLE || type == CIRCLE || type == POLYGON) {
+      /* TODO: add support for coords in % */
       if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "coords"))) {
          coords = Html_read_coords(html, attrbuf);
 
          if (type == RECTANGLE) {
             if (coords->size() != 4)
-               BUG_MSG("<area> rectangle must have four coordinate values.");
+               BUG_MSG("<area> rectangle must have four coordinate values\n");
             if (coords->size() >= 4)
                shape = new Rectangle(coords->get(0),
                                      coords->get(1),
@@ -2437,7 +2340,7 @@ static void
                                      coords->get(3) - coords->get(1));
          } else if (type == CIRCLE) {
             if (coords->size() != 3)
-               BUG_MSG("<area> circle must have three coordinate values.");
+               BUG_MSG("<area> circle must have three coordinate values\n");
             if (coords->size() >= 3)
                shape = new Circle(coords->get(0), coords->get(1),
                                   coords->get(2));
@@ -2445,7 +2348,7 @@ static void
             Polygon *poly;
             int i;
             if (coords->size() % 2)
-               BUG_MSG("<area> polygon with odd number of coordinates.");
+               BUG_MSG("<area> polygon with odd number of coordinates\n");
             shape = poly = new Polygon();
             for (i = 0; i < (coords->size() / 2); i++)
                poly->addPoint(coords->get(2*i), coords->get(2*i + 1));
@@ -2457,6 +2360,8 @@ static void
       if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "href"))) {
          url = a_Html_url_new(html, attrbuf, NULL, 0);
          dReturn_if_fail ( url != NULL );
+         if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "alt")))
+            a_Url_set_alt(url, attrbuf);
 
          link = Html_set_new_link(html, &url);
       }
@@ -2493,160 +2398,13 @@ static void Html_tag_open_object(DilloHtml *html, const char *tag, int tagsize)
 
       html->styleEngine->setNonCssHint(PROPERTY_X_LINK, CSS_TYPE_INTEGER,
                                        Html_set_new_link(html, &url));
+
+      HT2TB(html)->addText("[OBJECT]", html->styleEngine->wordStyle ());
    }
    a_Url_free(base_url);
 }
 
-static void Html_tag_content_object(DilloHtml *html, const char *tag,
-                                    int tagsize)
-{
-   if (a_Html_get_attr(html, tag, tagsize, "data"))
-      HT2TB(html)->addText("[OBJECT]", html->wordStyle ());
-}
-
 /*
- * <VIDEO>
- * Provide a link to the video.
- */
-static void Html_tag_open_video(DilloHtml *html, const char *tag, int tagsize)
-{
-   DilloUrl *url;
-   const char *attrbuf;
-
-   if (html->InFlags & IN_MEDIA) {
-      MSG("<video> not handled when already inside a media element.\n");
-      return;
-   }
-   /* TODO: poster attr */
-
-   if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "src"))) {
-      url = a_Html_url_new(html, attrbuf, NULL, 0);
-      dReturn_if_fail ( url != NULL );
-
-      if (a_Capi_get_flags_with_redirection(url) & CAPI_IsCached) {
-         html->styleEngine->setPseudoVisited ();
-      } else {
-         html->styleEngine->setPseudoLink ();
-      }
-
-      html->styleEngine->setNonCssHint(PROPERTY_X_LINK, CSS_TYPE_INTEGER,
-                                       Html_set_new_link(html, &url));
-
-      HT2TB(html)->addText("[VIDEO]", html->wordStyle ());
-   }
-   html->InFlags |= IN_MEDIA;
-}
-
-/*
- * <AUDIO>
- * Provide a link to the audio.
- */
-static void Html_tag_open_audio(DilloHtml *html, const char *tag, int tagsize)
-{
-   DilloUrl *url;
-   const char *attrbuf;
-
-   if (html->InFlags & IN_MEDIA) {
-      MSG("<audio> not handled when already inside a media element.\n");
-      return;
-   }
-
-   if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "src"))) {
-      url = a_Html_url_new(html, attrbuf, NULL, 0);
-      dReturn_if_fail ( url != NULL );
-
-      if (a_Capi_get_flags_with_redirection(url) & CAPI_IsCached) {
-         html->styleEngine->setPseudoVisited ();
-      } else {
-         html->styleEngine->setPseudoLink ();
-      }
-
-      html->styleEngine->setNonCssHint(PROPERTY_X_LINK, CSS_TYPE_INTEGER,
-                                       Html_set_new_link(html, &url));
-
-      HT2TB(html)->addText("[AUDIO]", html->wordStyle ());
-   }
-   html->InFlags |= IN_MEDIA;
-}
-
-/*
- * <SOURCE>
- * Media resource; provide a link to its address.
- */
-static void Html_tag_open_source(DilloHtml *html, const char *tag,
-                                    int tagsize)
-{
-   const char *attrbuf;
-
-   if (!(html->InFlags & IN_MEDIA)) {
-      // Can also be inside a picture element.
-      // BUG_MSG("<source> not inside a media element.");
-      return;
-   }
-   if (!(attrbuf = a_Html_get_attr(html, tag, tagsize, "src"))) {
-      BUG_MSG("<source> requires src attribute.");
-      return;
-   } else {
-      DilloUrl *url = a_Html_url_new(html, attrbuf, NULL, 0);
-
-      dReturn_if_fail ( url != NULL );
-
-      if (a_Capi_get_flags_with_redirection(url) & CAPI_IsCached) {
-         html->styleEngine->setPseudoVisited ();
-      } else {
-         html->styleEngine->setPseudoLink ();
-      }
-      html->styleEngine->setNonCssHint(PROPERTY_X_LINK, CSS_TYPE_INTEGER,
-                                       Html_set_new_link(html, &url));
-   }
-}
-
-static void Html_tag_content_source(DilloHtml *html, const char *tag,
-                                    int tagsize)
-{
-   if ((html->InFlags & IN_MEDIA) && a_Html_get_attr(html, tag, tagsize,"src"))
-      HT2TB(html)->addText("[MEDIA SOURCE]", html->wordStyle ());
-}
-
-/**
- * Media (AUDIO/VIDEO) close function.
- */
-static void Html_tag_close_media(DilloHtml *html)
-{
-   html->InFlags &= ~IN_MEDIA;
-}
-
-/*
- * <EMBED>
- * Provide a link to embedded content.
- */
-static void Html_tag_open_embed(DilloHtml *html, const char *tag, int tagsize)
-{
-   const char *attrbuf;
-
-   if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "src"))) {
-      DilloUrl *url = a_Html_url_new(html, attrbuf, NULL, 0);
-
-      dReturn_if_fail ( url != NULL );
-
-      if (a_Capi_get_flags_with_redirection(url) & CAPI_IsCached) {
-         html->styleEngine->setPseudoVisited ();
-      } else {
-         html->styleEngine->setPseudoLink ();
-      }
-
-      html->styleEngine->setNonCssHint(PROPERTY_X_LINK, CSS_TYPE_INTEGER,
-                                       Html_set_new_link(html, &url));
-   }
-}
-
-static void Html_tag_content_embed(DilloHtml *html,const char *tag,int tagsize)
-{
-   if (a_Html_get_attr(html, tag, tagsize, "src"))
-      HT2TB(html)->addText("[EMBED]", html->wordStyle ());
-}
-
-/**
  * Test and extract the link from a javascript instruction.
  */
 static const char* Html_get_javascript_link(DilloHtml *html)
@@ -2655,13 +2413,13 @@ static const char* Html_get_javascript_link(DilloHtml *html)
    char ch, *p1, *p2;
    Dstr *Buf = html->attr_data;
 
-   if (dStrnAsciiCasecmp("javascript", Buf->str, 10) == 0) {
+   if (dStrncasecmp("javascript", Buf->str, 10) == 0) {
       i = strcspn(Buf->str, "'\"");
       ch = Buf->str[i];
       if ((ch == '"' || ch == '\'') &&
           (p2 = strchr(Buf->str + i + 1 , ch))) {
          p1 = Buf->str + i;
-         BUG_MSG("Link depends on javascript().");
+         BUG_MSG("link depends on javascript()\n");
          dStr_truncate(Buf, p2 - Buf->str);
          dStr_erase(Buf, 0, p1 - Buf->str + 1);
       }
@@ -2669,15 +2427,14 @@ static const char* Html_get_javascript_link(DilloHtml *html)
    return Buf->str;
 }
 
-/**
+/*
  * Register an anchor for this page.
  */
 static void Html_add_anchor(DilloHtml *html, const char *name)
 {
    _MSG("Registering ANCHOR: %s\n", name);
-   if (!HT2TB(html)->addAnchor (name, html->style ()))
-      BUG_MSG("Anchor names must be unique within the document (\"%s\").",
-              name);
+   if (!HT2TB(html)->addAnchor (name, html->styleEngine->style ()))
+      BUG_MSG("Anchor names must be unique within the document\n");
    /*
     * According to Sec. 12.2.1 of the HTML 4.01 spec, "anchor names that
     * differ only in case may not appear in the same document", but
@@ -2697,13 +2454,12 @@ static void Html_tag_open_a(DilloHtml *html, const char *tag, int tagsize)
    const char *attrbuf;
 
    /* TODO: add support for MAP with A HREF */
-   html->InFlags |= IN_A;
    if (html->InFlags & IN_MAP)
-      Html_tag_content_area(html, tag, tagsize);
+      Html_tag_open_area(html, tag, tagsize);
 
    if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "href"))) {
       /* if it's a javascript link, extract the reference. */
-      if (D_ASCII_TOLOWER(attrbuf[0]) == 'j')
+      if (tolower(attrbuf[0]) == 'j')
          attrbuf = Html_get_javascript_link(html);
 
       url = a_Html_url_new(html, attrbuf, NULL, 0);
@@ -2748,8 +2504,7 @@ static void Html_tag_open_a(DilloHtml *html, const char *tag, int tagsize)
          /* We compare the "id" value with the url-decoded "name" value */
          if (!id || strcmp(nameVal, id)) {
             if (id)
-               BUG_MSG("In <a>, id ('%s') and name ('%s') attributes differ.",
-                        id, nameVal);
+               BUG_MSG("'id' and 'name' attribute of <a> tag differ\n");
             Html_add_anchor(html, nameVal);
          }
 
@@ -2761,9 +2516,8 @@ static void Html_tag_open_a(DilloHtml *html, const char *tag, int tagsize)
 /*
  * <A> close function
  */
-static void Html_tag_close_a(DilloHtml *html)
+static void Html_tag_close_a(DilloHtml *html, int TagIdx)
 {
-   html->InFlags &= ~IN_A;
    html->InVisitedLink = false;
 }
 
@@ -2773,7 +2527,7 @@ static void Html_tag_close_a(DilloHtml *html)
 static void Html_tag_open_blockquote(DilloHtml *html,
                                      const char *tag, int tagsize)
 {
-   Html_add_textblock(html, true, 9, false);
+   Html_add_textblock(html, 9);
 }
 
 /*
@@ -2788,18 +2542,18 @@ static void Html_tag_open_q(DilloHtml *html, const char *tag, int tagsize)
    const char *U201C = "\xe2\x80\x9c";
 
    html->styleEngine->inheritBackgroundColor ();
-   HT2TB(html)->addText (U201C, html->wordStyle ());
+   HT2TB(html)->addText (U201C, html->styleEngine->wordStyle ());
 }
 
 /*
  * </Q>
  */
-static void Html_tag_close_q(DilloHtml *html)
+static void Html_tag_close_q(DilloHtml *html, int TagIdx)
 {
    /* Right Double Quotation Mark */
    const char *U201D = "\xe2\x80\x9d";
 
-   HT2TB(html)->addText (U201D, html->wordStyle ());
+   HT2TB(html)->addText (U201D, html->styleEngine->wordStyle ());
 }
 
 /*
@@ -2813,11 +2567,11 @@ static void Html_tag_open_ul(DilloHtml *html, const char *tag, int tagsize)
    if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "type"))) {
 
       /* list_style_type explicitly defined */
-      if (dStrAsciiCasecmp(attrbuf, "disc") == 0)
+      if (dStrcasecmp(attrbuf, "disc") == 0)
          list_style_type = LIST_STYLE_TYPE_DISC;
-      else if (dStrAsciiCasecmp(attrbuf, "circle") == 0)
+      else if (dStrcasecmp(attrbuf, "circle") == 0)
          list_style_type = LIST_STYLE_TYPE_CIRCLE;
-      else if (dStrAsciiCasecmp(attrbuf, "square") == 0)
+      else if (dStrcasecmp(attrbuf, "square") == 0)
          list_style_type = LIST_STYLE_TYPE_SQUARE;
       else
          /* invalid value */
@@ -2825,9 +2579,9 @@ static void Html_tag_open_ul(DilloHtml *html, const char *tag, int tagsize)
 
       html->styleEngine->setNonCssHint (CSS_PROPERTY_LIST_STYLE_TYPE,
                                         CSS_TYPE_ENUM, list_style_type);
-      if (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)
-         BUG_MSG("<ul> type attribute is obsolete.");
    }
+
+   Html_add_textblock(html, 9);
 
    S_TOP(html)->list_type = HTML_LIST_UNORDERED;
    S_TOP(html)->list_number = 0;
@@ -2841,14 +2595,14 @@ static void Html_tag_open_ul(DilloHtml *html, const char *tag, int tagsize)
 static void Html_tag_open_dir(DilloHtml *html, const char *tag, int tagsize)
 {
    html->styleEngine->inheritBackgroundColor ();
-   HT2TB(html)->addParbreak (9, html->wordStyle ());
+   HT2TB(html)->addParbreak (9, html->styleEngine->wordStyle ());
 
    S_TOP(html)->list_type = HTML_LIST_UNORDERED;
    S_TOP(html)->list_number = 0;
    S_TOP(html)->ref_list_item = NULL;
 
    if (prefs.show_extra_warnings)
-      BUG_MSG("Obsolete list type; use <ul> instead.");
+      BUG_MSG("Obsolete list type; use <UL> instead\n");
 }
 
 /*
@@ -2856,16 +2610,7 @@ static void Html_tag_open_dir(DilloHtml *html, const char *tag, int tagsize)
  */
 static void Html_tag_open_menu(DilloHtml *html, const char *tag, int tagsize)
 {
-   /* In another bit of ridiculous mess from the HTML5 world, the menu
-    * element, which was deprecated in HTML4:
-    * - does not appear at all in W3C's HTML5 spec
-    * - appears in WHATWG's HTML5 doc and the W3C's 5.1 draft, where it
-    *   means something totally different than it did in the old days
-    *   (now it's for popup menus and toolbar menus rather than being a
-    *   sort of list).
-    */
-   if (!(html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f))
-      Html_tag_open_dir(html, tag, tagsize);
+   Html_tag_open_dir(html, tag, tagsize);
 }
 
 /*
@@ -2894,11 +2639,13 @@ static void Html_tag_open_ol(DilloHtml *html, const char *tag, int tagsize)
                                         CSS_TYPE_ENUM, listStyleType);
    }
 
+   Html_add_textblock(html, 9);
+
    S_TOP(html)->list_type = HTML_LIST_ORDERED;
 
    if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "start")) &&
        (n = (int) strtol(attrbuf, NULL, 10)) < 0) {
-      BUG_MSG("Illegal '-' character in START attribute; Starting from 0.");
+      BUG_MSG( "illegal '-' character in START attribute; Starting from 0\n");
       n = 0;
    }
    S_TOP(html)->list_number = n;
@@ -2910,37 +2657,52 @@ static void Html_tag_open_ol(DilloHtml *html, const char *tag, int tagsize)
  */
 static void Html_tag_open_li(DilloHtml *html, const char *tag, int tagsize)
 {
-   Style *style = html->style ();
+   Style *style = html->styleEngine->style ();
+   Style *wordStyle = html->styleEngine->wordStyle ();
+   Widget **ref_list_item;
+   ListItem *list_item;
    int *list_number;
    const char *attrbuf;
+   char buf[16];
 
-   if (S_TOP(html)->list_type == HTML_LIST_NONE &&
-       !(html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)) {
-      /* In WHATWG's HTML5 and W3C's HTML 5.1, LI can appear within MENUs
-       * of the toolbar type.
-       */
-      BUG_MSG("<li> outside <ul> or <ol>.");
-   }
+   if (S_TOP(html)->list_type == HTML_LIST_NONE)
+      BUG_MSG("<li> outside <ul> or <ol>\n");
 
    html->InFlags |= IN_LI;
 
    /* Get our parent tag's variables (used as state storage) */
    list_number = &html->stack->getRef(html->stack->size()-2)->list_number;
+   ref_list_item = &html->stack->getRef(html->stack->size()-2)->ref_list_item;
 
-   if (style->listStyleType >= LIST_STYLE_TYPE_DECIMAL) {
+   HT2TB(html)->addParbreak (0, wordStyle);
+
+   list_item = new ListItem ((ListItem*)*ref_list_item,prefs.limit_text_width);
+   HT2TB(html)->addWidget (list_item, style);
+   HT2TB(html)->addParbreak (0, wordStyle);
+   *ref_list_item = list_item;
+   S_TOP(html)->textblock = html->dw = list_item;
+
+   if (style->listStyleType == LIST_STYLE_TYPE_NONE) {
+      // none
+   } else if (style->listStyleType >= LIST_STYLE_TYPE_DECIMAL) {
       // ordered
       if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "value")) &&
           (*list_number = strtol(attrbuf, NULL, 10)) < 0) {
-         BUG_MSG("Illegal negative list value attribute; Starting from 0.");
+         BUG_MSG("illegal negative LIST VALUE attribute; Starting from 0\n");
          *list_number = 0;
       }
+      numtostr((*list_number)++, buf, 16, style->listStyleType);
+      list_item->initWithText (buf, wordStyle);
+   } else {
+      // unordered
+      list_item->initWithWidget (new Bullet(), wordStyle);
    }
 }
 
 /*
- * Close <LI>.
+ * Close <LI>
  */
-static void Html_tag_close_li(DilloHtml *html)
+static void Html_tag_close_li(DilloHtml *html, int TagIdx)
 {
    html->InFlags &= ~IN_LI;
    ((ListItem *)html->dw)->flush ();
@@ -2951,32 +2713,26 @@ static void Html_tag_close_li(DilloHtml *html)
  */
 static void Html_tag_open_hr(DilloHtml *html, const char *tag, int tagsize)
 {
+   Widget *hruler;
    char *width_ptr;
    const char *attrbuf;
    int32_t size = 0;
 
    width_ptr = a_Html_get_attr_wdef(html, tag, tagsize, "width", NULL);
    if (width_ptr) {
-      if (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)
-         BUG_MSG("<hr> width attribute is obsolete.");
       html->styleEngine->setNonCssHint (CSS_PROPERTY_WIDTH,
                                         CSS_TYPE_LENGTH_PERCENTAGE,
                                         a_Html_parse_length (html, width_ptr));
       dFree(width_ptr);
    }
 
-   if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "size"))) {
+   if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "size")))
       size = strtol(attrbuf, NULL, 10);
-      if (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)
-         BUG_MSG("<hr> size attribute is obsolete.");
-   }
 
    a_Html_tag_set_align_attr(html, tag, tagsize);
 
    /* TODO: evaluate attribute */
    if (a_Html_get_attr(html, tag, tagsize, "noshade")) {
-      if (html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)
-         BUG_MSG("<hr> noshade attribute is obsolete.");
       html->styleEngine->setNonCssHint (CSS_PROPERTY_BORDER_TOP_STYLE,
                                         CSS_TYPE_ENUM, BORDER_SOLID);
       html->styleEngine->setNonCssHint (CSS_PROPERTY_BORDER_BOTTOM_STYLE,
@@ -3005,17 +2761,12 @@ static void Html_tag_open_hr(DilloHtml *html, const char *tag, int tagsize)
                                         size_bottom);
    }
 
-}
-
-static void Html_tag_content_hr(DilloHtml *html, const char *tag, int tagsize)
-{
-   Widget *hruler;
-   HT2TB(html)->addParbreak (5, html->wordStyle ());
+   HT2TB(html)->addParbreak (5, html->styleEngine->wordStyle ());
 
    hruler = new Ruler();
-   hruler->setStyle (html->style ());
-   HT2TB(html)->addWidget (hruler, html->style ());
-   HT2TB(html)->addParbreak (5, html->wordStyle ());
+   hruler->setStyle (html->styleEngine->style ());
+   HT2TB(html)->addWidget (hruler, html->styleEngine->style ());
+   HT2TB(html)->addParbreak (5, html->styleEngine->wordStyle ());
 }
 
 /*
@@ -3025,7 +2776,7 @@ static void Html_tag_open_dl(DilloHtml *html, const char *tag, int tagsize)
 {
    /* may want to actually do some stuff here. */
    html->styleEngine->inheritBackgroundColor ();
-   HT2TB(html)->addParbreak (9, html->wordStyle ());
+   HT2TB(html)->addParbreak (9, html->styleEngine->wordStyle ());
 }
 
 /*
@@ -3034,7 +2785,7 @@ static void Html_tag_open_dl(DilloHtml *html, const char *tag, int tagsize)
 static void Html_tag_open_dt(DilloHtml *html, const char *tag, int tagsize)
 {
    html->styleEngine->inheritBackgroundColor ();
-   HT2TB(html)->addParbreak (9, html->wordStyle ());
+   HT2TB(html)->addParbreak (9, html->styleEngine->wordStyle ());
 }
 
 /*
@@ -3042,7 +2793,7 @@ static void Html_tag_open_dt(DilloHtml *html, const char *tag, int tagsize)
  */
 static void Html_tag_open_dd(DilloHtml *html, const char *tag, int tagsize)
 {
-   Html_add_textblock(html, true, 9, false);
+   Html_add_textblock(html, 9);
 }
 
 /*
@@ -3051,7 +2802,7 @@ static void Html_tag_open_dd(DilloHtml *html, const char *tag, int tagsize)
 static void Html_tag_open_pre(DilloHtml *html, const char *tag, int tagsize)
 {
    html->styleEngine->inheritBackgroundColor ();
-   HT2TB(html)->addParbreak (9, html->wordStyle ());
+   HT2TB(html)->addParbreak (9, html->styleEngine->wordStyle ());
 
    html->InFlags |= IN_PRE;
 }
@@ -3059,53 +2810,35 @@ static void Html_tag_open_pre(DilloHtml *html, const char *tag, int tagsize)
 /*
  * Custom close for <PRE>
  */
-static void Html_tag_close_pre(DilloHtml *html)
+static void Html_tag_close_pre(DilloHtml *html, int TagIdx)
 {
    html->InFlags &= ~IN_PRE;
+   HT2TB(html)->addParbreak (9, html->styleEngine->wordStyle ());
 }
 
-/**
- * Check whether a tag is in the "excluding" element set for PRE.
+/*
+ * Check whether a tag is in the "excluding" element set for PRE
  * Excl. Set = {IMG, OBJECT, APPLET, BIG, SMALL, SUB, SUP, FONT, BASEFONT}
  */
-static int Html_tag_pre_excludes(DilloHtml *html, int tag_idx)
+static int Html_tag_pre_excludes(int tag_idx)
 {
-   if (!(html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)) {
-      /* HTML5 doesn't say anything about excluding elements */
-      const char *es_set[] = {"img", "object", "applet", "big", "small", "sub",
-                              "sup", "font", "basefont", NULL};
-      static int ei_set[10], i;
+   const char *es_set[] = {"img", "object", "applet", "big", "small", "sub",
+                           "sup", "font", "basefont", NULL};
+   static int ei_set[10], i;
 
-      /* initialize array */
-      if (!ei_set[0])
-         for (i = 0; es_set[i]; ++i)
-            ei_set[i] = a_Html_tag_index(es_set[i]);
+   /* initialize array */
+   if (!ei_set[0])
+      for (i = 0; es_set[i]; ++i)
+         ei_set[i] = a_Html_tag_index(es_set[i]);
 
-      for (i = 0; ei_set[i]; ++i)
-         if (tag_idx == ei_set[i])
-            return 1;
-   }
+   for (i = 0; ei_set[i]; ++i)
+      if (tag_idx == ei_set[i])
+         return 1;
    return 0;
 }
 
-/**
- * Update the document's content type information based on meta tag data.
- */
-static void Html_update_content_type(DilloHtml *html, const char *content)
-{
-   const char *new_content = a_Capi_set_content_type(html->page_url, content,
-                                                     "meta");
-   /* Cannot ask cache whether the content type was changed, as
-    * this code in another bw might have already changed it for us.
-    */
-   if (a_Misc_content_type_cmp(html->content_type, new_content)) {
-      html->stop_parser = true; /* The cache buffer is no longer valid */
-      a_UIcmd_repush(html->bw);
-   }
-}
-
-/**
- * Handle META
+/*
+ * Handle <META>
  * We do not support http-equiv=refresh with delay>0 because it's
  * non standard, (the HTML 4.01 SPEC recommends explicitly to avoid it).
  * More info at:
@@ -3127,25 +2860,19 @@ static void Html_tag_open_meta(DilloHtml *html, const char *tag, int tagsize)
 " <tr><td bgcolor='#a0a0a0' colspan='2'>The author wanted you to go\n"
 " <a href='%s'>here</a>%s</td></tr></table><br>\n";
 
-   const char *p, *equiv, *charset, *content;
+   const char *p, *equiv, *content, *new_content;
    char delay_str[64], *mr_url;
    DilloUrl *new_url;
    int delay;
 
    /* only valid inside HEAD */
    if (!(html->InFlags & IN_HEAD)) {
-      if (!((html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f) &&
-            a_Html_get_attr(html, tag, tagsize, "itemprop"))) {
-         /* With the HTML 5.1 draft spec, meta with itemprop may appear
-          * in the body.
-          */
-         BUG_MSG("This <meta> element must be inside the HEAD section.");
-      }
+      BUG_MSG("META elements must be inside the HEAD section\n");
       return;
    }
 
    if ((equiv = a_Html_get_attr(html, tag, tagsize, "http-equiv"))) {
-      if (!dStrAsciiCasecmp(equiv, "refresh") &&
+      if (!dStrcasecmp(equiv, "refresh") &&
           (content = a_Html_get_attr(html, tag, tagsize, "content"))) {
 
          /* Get delay, if present, and make a message with it */
@@ -3155,54 +2882,37 @@ static void Html_tag_open_meta(DilloHtml *html, const char *tag, int tagsize)
          } else {
             sprintf(delay_str, ".");
          }
-         /* Skip to anything after "URL=" or ";" if "URL=" is not found */
-         int has_url = 1;
-         if ((p = dStriAsciiStr(content, "url=")))
-            content = p + strlen("url=");
-         else if ((p = strstr(content, ";")))
-            content = p + strlen(";");
-         else
-            has_url = 0;
-
-         if (has_url) {
-            /* Handle the case of a quoted URL */
-            if (*content == '"' || *content == '\'') {
-               if ((p = strchr(content + 1, *content)))
-                  mr_url = dStrndup(content + 1, p - content - 1);
-               else
-                  mr_url = dStrdup(content + 1);
-            } else {
-               mr_url = dStrdup(content);
-            }
+         /* Skip to anything after "URL=" */
+         while (*content && *(content++) != '=') ;
+         /* Handle the case of a quoted URL */
+         if (*content == '"' || *content == '\'') {
+            if ((p = strchr(content + 1, *content)))
+               mr_url = dStrndup(content + 1, p - content - 1);
+            else
+               mr_url = dStrdup(content + 1);
          } else {
-            mr_url = dStrdup("");
+            mr_url = dStrdup(content);
          }
-
-         new_url = a_Html_url_new(html, mr_url, NULL, 0);
+         new_url = a_Url_new(mr_url, URL_STR(html->base_url));
 
          if (a_Url_cmp(html->base_url, new_url) == 0) {
             /* redirection loop, or empty url string: ignore */
-            BUG_MSG("<meta> refresh: %s.",
+            BUG_MSG("META refresh: %s\n",
                     *mr_url ? "redirection loop" : "no target URL");
          } else if (delay == 0) {
             /* zero-delay redirection */
             html->stop_parser = true;
-            if (URL_FLAGS(html->base_url) & URL_SpamSafe) {
-               a_UIcmd_set_msg(html->bw,
-                  "WARNING: local URL with META refresh.  Aborting.");
-            } else if (a_Capi_dpi_verify_request(html->bw, new_url)) {
-               a_UIcmd_redirection0((void*)html->bw, new_url);
-            }
+            a_UIcmd_redirection0((void*)html->bw, new_url);
          } else {
             /* Send a custom HTML message.
              * TODO: This is a hairy hack,
              *       It'd be much better to build a widget. */
             Dstr *ds_msg = dStr_sized_new(256);
-            dStr_sprintf(ds_msg, meta_template, URL_STR(new_url), delay_str);
+            dStr_sprintf(ds_msg, meta_template, mr_url, delay_str);
             {
                int o_InFlags = html->InFlags;
                int o_TagSoup = html->TagSoup;
-               html->InFlags = IN_BODY + IN_META_HACK;
+               html->InFlags = IN_BODY;
                html->TagSoup = false;
                Html_write_raw(html, ds_msg->str, ds_msg->len, 0);
                html->TagSoup = o_TagSoup;
@@ -3213,21 +2923,22 @@ static void Html_tag_open_meta(DilloHtml *html, const char *tag, int tagsize)
          a_Url_free(new_url);
          dFree(mr_url);
 
-      } else if (!dStrAsciiCasecmp(equiv, "content-type") &&
+      } else if (!dStrcasecmp(equiv, "content-type") &&
                  (content = a_Html_get_attr(html, tag, tagsize, "content"))) {
          _MSG("Html_tag_open_meta: content={%s}\n", content);
-         Html_update_content_type(html, content);
+         /* Cannot ask cache whether the content type was changed, as
+          * this code in another bw might have already changed it for us.
+          */
+         new_content = a_Capi_set_content_type(html->page_url,content,"meta");
+         if (a_Misc_content_type_cmp(html->content_type, new_content)) {
+            html->stop_parser = true; /* The cache buffer is no longer valid */
+            a_UIcmd_repush(html->bw);
+         }
       }
-   } else if (html->DocType == DT_HTML && html->DocTypeVersion == 5.0f &&
-              (charset = a_Html_get_attr(html, tag, tagsize, "charset"))) {
-      char *content = dStrconcat("text/html; charset=", charset, NULL);
-
-      Html_update_content_type(html, content);
-      dFree(content);
    }
 }
 
-/**
+/*
  * Called by the network engine when a stylesheet has new data.
  */
 static void Html_css_load_callback(int Op, CacheClient_t *Client)
@@ -3241,7 +2952,7 @@ static void Html_css_load_callback(int Op, CacheClient_t *Client)
    }
 }
 
-/**
+/*
  * Tell cache to retrieve a stylesheet
  */
 void a_Html_load_stylesheet(DilloHtml *html, DilloUrl *url)
@@ -3252,43 +2963,44 @@ void a_Html_load_stylesheet(DilloHtml *html, DilloUrl *url)
    dReturn_if (url == NULL || ! prefs.load_stylesheets);
 
    _MSG("Html_load_stylesheet: ");
-   if ((a_Capi_get_flags_with_redirection(url) & CAPI_Completed) &&
-       a_Capi_get_buf(url, &data, &len)) {
+   if (a_Capi_get_buf(url, &data, &len)) {
       _MSG("cached URL=%s len=%d", URL_STR(url), len);
-      if (strncmp("@charset \"", data, 10) == 0) {
-         char *endq = strchr(data+10, '"');
+      if (a_Capi_get_flags_with_redirection(url) & CAPI_Completed) {
+         if (strncmp("@charset \"", data, 10) == 0) {
+            char *endq = strchr(data+10, '"');
 
-         if (endq && (endq - data <= 51)) {
-            /* IANA limits charset names to 40 characters */
-            char *content_type;
+            if (endq && (endq - data <= 51)) {
+               /* IANA limits charset names to 40 characters */
+               char *content_type;
 
-            *endq = '\0';
-            content_type = dStrconcat("text/css; charset=", data+10, NULL);
-            *endq = '"';
-            a_Capi_unref_buf(url);
-            a_Capi_set_content_type(url, content_type, "meta");
-            dFree(content_type);
-            a_Capi_get_buf(url, &data, &len);
+               *endq = '\0';
+               content_type = dStrconcat("text/css; charset=", data+10, NULL);
+               *endq = '"';
+               a_Capi_unref_buf(url);
+               a_Capi_set_content_type(url, content_type, "meta");
+               dFree(content_type);
+               a_Capi_get_buf(url, &data, &len);
+            }
          }
+         html->styleEngine->parse(html, url, data, len, CSS_ORIGIN_AUTHOR);
       }
-      html->styleEngine->parse(html, url, data, len, CSS_ORIGIN_AUTHOR);
       a_Capi_unref_buf(url);
    } else {
       /* Fill a Web structure for the cache query */
       int ClientKey;
-      DilloWeb *Web = a_Web_new(html->bw, url, html->page_url);
-      Web->flags |= WEB_Stylesheet;
+      DilloWeb *Web = a_Web_new(url, html->page_url);
+      Web->bw = html->bw;
       if ((ClientKey = a_Capi_open_url(Web, Html_css_load_callback, NULL))) {
          ++html->bw->NumPendingStyleSheets;
          a_Bw_add_client(html->bw, ClientKey, 0);
          a_Bw_add_url(html->bw, url);
-         MSG("NumPendingStyleSheets=%d\n", html->bw->NumPendingStyleSheets);
+         MSG("NumPendingStyleSheets=%d", html->bw->NumPendingStyleSheets);
       }
    }
-   _MSG("\n");
+   MSG("\n");
 }
 
-/**
+/*
  * Parse the LINK element (Only CSS stylesheets by now).
  * (If it either hits or misses, is not relevant here; that's up to the
  *  cache functions)
@@ -3310,27 +3022,21 @@ static void Html_tag_open_link(DilloHtml *html, const char *tag, int tagsize)
 
    /* Ignore LINK outside HEAD */
    if (!(html->InFlags & IN_HEAD)) {
-      if (!((html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f) &&
-            a_Html_get_attr(html, tag, tagsize, "itemprop"))) {
-         /* With the HTML 5.1 draft spec, link with itemprop may appear
-          * in the body.
-          */
-         BUG_MSG("This <link> element must be inside the HEAD section.");
-      }
+      BUG_MSG("the LINK element must be inside the HEAD section\n");
       return;
    }
    /* Remote stylesheets enabled? */
    dReturn_if_fail (prefs.load_stylesheets);
    /* CSS stylesheet link */
    if (!(attrbuf = a_Html_get_attr(html, tag, tagsize, "rel")) ||
-       dStrAsciiCasecmp(attrbuf, "stylesheet"))
+       dStrcasecmp(attrbuf, "stylesheet"))
       return;
 
    /* IMPLIED attributes? */
    if (((attrbuf = a_Html_get_attr(html, tag, tagsize, "type")) &&
-        dStrAsciiCasecmp(attrbuf, "text/css")) ||
+        dStrcasecmp(attrbuf, "text/css")) ||
        ((attrbuf = a_Html_get_attr(html, tag, tagsize, "media")) &&
-        !dStriAsciiStr(attrbuf, "screen") && dStrAsciiCasecmp(attrbuf, "all")))
+        !dStristr(attrbuf, "screen") && dStrcasecmp(attrbuf, "all")))
       return;
 
    if (!(attrbuf = a_Html_get_attr(html, tag, tagsize, "href")) ||
@@ -3343,7 +3049,23 @@ static void Html_tag_open_link(DilloHtml *html, const char *tag, int tagsize)
    a_Url_free(url);
 }
 
-/**
+/*
+ * Set the history of the menu to be consistent with the active menuitem.
+ */
+//static void Html_select_set_history(DilloHtmlInput *input)
+//{
+// int i;
+//
+// for (i = 0; i < input->select->num_options; i++) {
+//    if (GTK_CHECK_MENU_ITEM(input->select->options[i].menuitem)->active) {
+//       gtk_option_menu_set_history(GTK_OPTION_MENU(input->widget), i);
+//       break;
+//    }
+// }
+//}
+
+
+/*
  * Set the Document Base URI
  */
 static void Html_tag_open_base(DilloHtml *html, const char *tag, int tagsize)
@@ -3353,25 +3075,20 @@ static void Html_tag_open_base(DilloHtml *html, const char *tag, int tagsize)
 
    if (html->InFlags & IN_HEAD) {
       if ((attrbuf = a_Html_get_attr(html, tag, tagsize, "href"))) {
-         bool_t html5 = html->DocType == DT_HTML &&
-                        html->DocTypeVersion >= 5.0f;
-
-         BaseUrl = html5 ? a_Html_url_new(html, attrbuf, NULL, 0) :
-                           a_Html_url_new(html, attrbuf, "", 1);
-
-         if (html5 || URL_SCHEME_(BaseUrl)) {
+         BaseUrl = a_Html_url_new(html, attrbuf, "", 1);
+         if (URL_SCHEME_(BaseUrl)) {
             /* Pass the URL_SpamSafe flag to the new base url */
             a_Url_set_flags(
                BaseUrl, URL_FLAGS(html->base_url) & URL_SpamSafe);
             a_Url_free(html->base_url);
             html->base_url = BaseUrl;
          } else {
-            BUG_MSG("<base> URI is relative (it MUST be absolute).");
+            BUG_MSG("base URI is relative (it MUST be absolute)\n");
             a_Url_free(BaseUrl);
          }
       }
    } else {
-      BUG_MSG("<base> not inside HEAD section.");
+      BUG_MSG("the BASE element must appear in the HEAD section\n");
    }
 }
 
@@ -3381,84 +3098,43 @@ static void Html_tag_open_default(DilloHtml *html,const char *tag,int tagsize)
 }
 
 /*
- * <SPAN>
- */
-static void Html_tag_open_span(DilloHtml *html, const char *tag, int tagsize)
-{
-   const char *attrbuf;
-
-   html->styleEngine->inheritBackgroundColor();
-
-   if (prefs.show_tooltip &&
-       (attrbuf = a_Html_get_attr(html, tag, tagsize, "title"))) {
-
-      html->styleEngine->setNonCssHint (PROPERTY_X_TOOLTIP, CSS_TYPE_STRING,
-                                        attrbuf);
-   }
-}
-
-/*
- * html5 sectioning stuff: article aside nav section header footer
- */
-static void Html_tag_open_sectioning(DilloHtml *html, const char *tag,
-                                     int tagsize)
-{
-   const char *attrbuf;
-
-   if (prefs.show_tooltip &&
-       (attrbuf = a_Html_get_attr(html, tag, tagsize, "title"))) {
-
-      html->styleEngine->setNonCssHint (PROPERTY_X_TOOLTIP, CSS_TYPE_STRING,
-                                        attrbuf);
-   }
-}
-
-/*
  * <DIV> (TODO: make a complete implementation)
  */
 static void Html_tag_open_div(DilloHtml *html, const char *tag, int tagsize)
 {
    a_Html_tag_set_align_attr (html, tag, tagsize);
-   Html_tag_open_sectioning(html, tag, tagsize);
-}
-
-/**
- * Default close for paragraph tags - pop the stack and break.
- */
-static void Html_tag_close_par(DilloHtml *html)
-{
-   HT2TB(html)->addParbreak (9, html->wordStyle ());
+   Html_add_textblock(html, 0);
 }
 
 /*
- * <WBR> "The wbr element represents a line break opportunity."
+ * Default close for most tags.
  */
-static void Html_tag_content_wbr(DilloHtml *html, const char *tag, int tagsize)
+static void Html_tag_close_default(DilloHtml *html, int TagIdx)
 {
-   HT2TB(html)->addBreakOption(html->wordStyle (), true);
+}
+
+/*
+ * Default close for paragraph tags - pop the stack and break.
+ */
+static void Html_tag_close_par(DilloHtml *html, int TagIdx)
+{
+   HT2TB(html)->addParbreak (9, html->styleEngine->wordStyle ());
 }
 
 
-/**
- * Function index for the open, content, and close functions for each tag.
- * (Alphabetically sorted for a binary search).
- * The open and close functions are always called. They are used for style
- * handling and HTML bug reporting.
- * Content creation (e.g. adding new widgets or text) is done in the content
- * function, which is not called in the display:none case.
- * Note: many tags don't need a content function (e.g. `<div>`, `<span>`, ...).
+/*
+ * Function index for the open and close functions for each tag
+ * (Alphabetically sorted for a binary search)
  *
  * Explanation for the 'Flags' field:
  *
- * @verbatim
- *   {"address", B8(01110), ...}
- *                  |||||
- *                  ||||`-- inline/block element (1/0 resp.)
+ *   {"address", B8(010110), ...}
+ *                  |||||`- inline element
+ *                  ||||`-- block element
  *                  |||`--- inline container
  *                  ||`---- block container
  *                  |`----- body element
  *                  `------ head element
- * @endverbatim
  *
  *   Notes:
  *     - The upper two bits are not used yet.
@@ -3466,126 +3142,105 @@ static void Html_tag_content_wbr(DilloHtml *html, const char *tag, int tagsize)
  *       (flow have both set)
  */
 
-static const TagInfo Tags[] = {
- {"a", B8(01011),'R', Html_tag_open_a, NULL, Html_tag_close_a},
- {"abbr", B8(01011),'R', Html_tag_open_abbr, NULL, NULL},
- /* acronym 010101 -- obsolete in HTML5 */
- {"address", B8(01110),'R', Html_tag_open_default, NULL, Html_tag_close_par},
- {"area", B8(01001),'F', Html_tag_open_default, Html_tag_content_area, NULL},
- {"article", B8(01110),'R', Html_tag_open_sectioning, NULL, NULL},
- {"aside", B8(01110),'R', Html_tag_open_sectioning, NULL, NULL},
- {"audio", B8(01111),'R', Html_tag_open_audio, NULL, Html_tag_close_media},
- {"b", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"base", B8(10001),'F', Html_tag_open_base, NULL, NULL},
- /* basefont 010001 -- obsolete in HTML5 */
+
+const TagInfo Tags[] = {
+ {"a", B8(010101),'R',2, Html_tag_open_a, Html_tag_close_a},
+ {"abbr", B8(010101),'R',2, Html_tag_open_abbr, Html_tag_close_default},
+ /* acronym 010101 */
+ {"address", B8(010110),'R',2, Html_tag_open_address, Html_tag_close_par},
+ {"area", B8(010001),'F',0, Html_tag_open_area, Html_tag_close_default},
+ {"b", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"base", B8(100001),'F',0, Html_tag_open_base, Html_tag_close_default},
+ /* basefont 010001 */
  /* bdo 010101 */
- {"big", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"blockquote", B8(01110),'R', Html_tag_open_blockquote, NULL, NULL},
- {"body", B8(01110),'O', Html_tag_open_body, NULL, Html_tag_close_body},
- {"br", B8(01001),'F', Html_tag_open_default, Html_tag_content_br, NULL},
- {"button", B8(01111),'R', Html_tag_open_button,NULL,Html_tag_close_button},
+ {"big", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"blockquote", B8(011110),'R',2, Html_tag_open_blockquote,
+                                  Html_tag_close_default},
+ {"body", B8(011110),'O',1, Html_tag_open_body, Html_tag_close_body},
+ {"br", B8(010001),'F',0, Html_tag_open_br, Html_tag_close_default},
+ {"button", B8(011101),'R',2, Html_tag_open_button, Html_tag_close_button},
  /* caption */
- {"center", B8(01110),'R', Html_tag_open_default, NULL, NULL},
- {"cite", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"code", B8(01011),'R', Html_tag_open_default, NULL, NULL},
+ {"center", B8(011110),'R',2, Html_tag_open_center, Html_tag_close_center},
+ {"cite", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"code", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
  /* col 010010 'F' */
  /* colgroup */
- {"dd", B8(01110),'O', Html_tag_open_dd, NULL, NULL},
- {"del", B8(01111),'R', Html_tag_open_default, NULL, NULL},
- {"dfn", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"dir", B8(01100),'R', Html_tag_open_dir, NULL, Html_tag_close_par},
+ {"dd", B8(011110),'O',1, Html_tag_open_dd, Html_tag_close_default},
+ {"del", B8(011101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"dfn", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"dir", B8(011010),'R',2, Html_tag_open_dir, Html_tag_close_par},
  /* TODO: complete <div> support! */
- {"div", B8(01110),'R', Html_tag_open_div, NULL, NULL},
- {"dl", B8(01100),'R', Html_tag_open_dl, NULL, Html_tag_close_par},
- {"dt", B8(01010),'O', Html_tag_open_dt, NULL, Html_tag_close_par},
- {"em", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"embed", B8(01001),'F', Html_tag_open_embed, Html_tag_content_embed, NULL},
+ {"div", B8(011110),'R',2, Html_tag_open_div, Html_tag_close_default},
+ {"dl", B8(011010),'R',2, Html_tag_open_dl, Html_tag_close_par},
+ {"dt", B8(010110),'O',1, Html_tag_open_dt, Html_tag_close_par},
+ {"em", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
  /* fieldset */
- {"figcaption", B8(01110),'R', Html_tag_open_default, NULL, NULL},
- {"figure", B8(01110),'R', Html_tag_open_default, NULL, NULL},
- {"font", B8(01011),'R', Html_tag_open_font, NULL, NULL},
- {"footer", B8(01110),'R', Html_tag_open_sectioning, NULL, NULL},
- {"form", B8(01110),'R', Html_tag_open_form, NULL, Html_tag_close_form},
- {"frame", B8(01000),'F', Html_tag_open_frame, Html_tag_content_frame, NULL},
- {"frameset", B8(01110),'R', Html_tag_open_default, Html_tag_content_frameset,
-                             NULL},
- {"h1", B8(01010),'R', Html_tag_open_h, NULL, NULL},
- {"h2", B8(01010),'R', Html_tag_open_h, NULL, NULL},
- {"h3", B8(01010),'R', Html_tag_open_h, NULL, NULL},
- {"h4", B8(01010),'R', Html_tag_open_h, NULL, NULL},
- {"h5", B8(01010),'R', Html_tag_open_h, NULL, NULL},
- {"h6", B8(01010),'R', Html_tag_open_h, NULL, NULL},
- {"head", B8(10111),'O', Html_tag_open_head, NULL, Html_tag_close_head},
- {"header", B8(01110),'R', Html_tag_open_sectioning, NULL, NULL},
- {"hr", B8(01000),'F', Html_tag_open_hr, Html_tag_content_hr, NULL},
- {"html", B8(00110),'O', Html_tag_open_html, NULL, Html_tag_close_html},
- {"i", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"iframe", B8(01111),'R', Html_tag_open_frame, Html_tag_content_frame, NULL},
- {"img", B8(01001),'F', Html_tag_open_img, Html_tag_content_img, NULL},
- {"input", B8(01001),'F', Html_tag_open_input, NULL, NULL},
- {"ins", B8(01111),'R', Html_tag_open_default, NULL, NULL},
- {"isindex", B8(11001),'F', Html_tag_open_isindex, NULL, NULL},
- {"kbd", B8(01011),'R', Html_tag_open_default, NULL, NULL},
+ {"font", B8(010101),'R',2, Html_tag_open_font, Html_tag_close_default},
+ {"form", B8(011110),'R',2, Html_tag_open_form, Html_tag_close_form},
+ {"frame", B8(010010),'F',0, Html_tag_open_frame, Html_tag_close_default},
+ {"frameset", B8(011110),'R',2,Html_tag_open_frameset, Html_tag_close_default},
+ {"h1", B8(010110),'R',2, Html_tag_open_h, Html_tag_close_par},
+ {"h2", B8(010110),'R',2, Html_tag_open_h, Html_tag_close_par},
+ {"h3", B8(010110),'R',2, Html_tag_open_h, Html_tag_close_par},
+ {"h4", B8(010110),'R',2, Html_tag_open_h, Html_tag_close_par},
+ {"h5", B8(010110),'R',2, Html_tag_open_h, Html_tag_close_par},
+ {"h6", B8(010110),'R',2, Html_tag_open_h, Html_tag_close_par},
+ {"head", B8(101101),'O',1, Html_tag_open_head, Html_tag_close_head},
+ {"hr", B8(010010),'F',0, Html_tag_open_hr, Html_tag_close_default},
+ {"html", B8(001110),'O',1, Html_tag_open_html, Html_tag_close_html},
+ {"i", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"iframe", B8(011110),'R',2, Html_tag_open_frame, Html_tag_close_default},
+ {"img", B8(010001),'F',0, Html_tag_open_img, Html_tag_close_default},
+ {"input", B8(010001),'F',0, Html_tag_open_input, Html_tag_close_default},
+ /* ins */
+ {"isindex", B8(110001),'F',0, Html_tag_open_isindex, Html_tag_close_default},
+ {"kbd", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
  /* label 010101 */
  /* legend 01?? */
- {"li", B8(01110),'O', Html_tag_open_li, NULL, Html_tag_close_li},
- {"link", B8(10001),'F', Html_tag_open_link, NULL, NULL},
- {"main", B8(01110),'R', Html_tag_open_sectioning, NULL, NULL},
- {"map", B8(01101),'R', Html_tag_open_default, Html_tag_content_map,
-                        Html_tag_close_map},
- {"mark", B8(01011),'R', Html_tag_open_default, NULL, NULL},
+ {"li", B8(011110),'O',1, Html_tag_open_li, Html_tag_close_li},
+ {"link", B8(100001),'F',0, Html_tag_open_link, Html_tag_close_default},
+ {"map", B8(011001),'R',2, Html_tag_open_map, Html_tag_close_map},
  /* menu 1010 -- TODO: not exactly 1010, it can contain LI and inline */
- {"menu", B8(01100),'R', Html_tag_open_menu, NULL, Html_tag_close_par},
- {"meta", B8(11001),'F', Html_tag_open_meta, NULL, NULL},
- {"nav", B8(01110),'R', Html_tag_open_sectioning, NULL, NULL},
- /* noframes 1011 -- obsolete in HTML5 */
+ {"menu", B8(011010),'R',2, Html_tag_open_menu, Html_tag_close_par},
+ {"meta", B8(100001),'F',0, Html_tag_open_meta, Html_tag_close_default},
+ /* noframes 1011 */
  /* noscript 1011 */
- {"object", B8(11111),'R', Html_tag_open_object, Html_tag_content_object,NULL},
- {"ol", B8(01100),'R', Html_tag_open_ol, NULL, NULL},
- {"optgroup", B8(01011),'O', Html_tag_open_optgroup, NULL,
-                             Html_tag_close_optgroup},
- {"option", B8(01001),'O', Html_tag_open_option, NULL, Html_tag_close_option},
- {"p", B8(01010),'O', Html_tag_open_p, NULL, NULL},
+ {"object", B8(111101),'R',2, Html_tag_open_object, Html_tag_close_default},
+ {"ol", B8(011010),'R',2, Html_tag_open_ol, Html_tag_close_default},
+ /* optgroup */
+ {"option", B8(010001),'O',1, Html_tag_open_option, Html_tag_close_default},
+ {"p", B8(010110),'O',1, Html_tag_open_p, Html_tag_close_par},
  /* param 010001 'F' */
- {"pre", B8(01010),'R', Html_tag_open_pre, NULL, Html_tag_close_pre},
- {"q", B8(01011),'R', Html_tag_open_q, NULL, Html_tag_close_q},
- {"s", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"samp", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"script", B8(11101),'R', Html_tag_open_script,NULL,Html_tag_close_script},
- {"section", B8(01110),'R', Html_tag_open_sectioning, NULL, NULL},
- {"select", B8(01011),'R', Html_tag_open_select,NULL,Html_tag_close_select},
- {"small", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"source", B8(01001),'F', Html_tag_open_source, Html_tag_content_source,NULL},
- {"span", B8(01011),'R', Html_tag_open_span, NULL, NULL},
- {"strike", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"strong", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"style", B8(10011),'R', Html_tag_open_style, NULL, Html_tag_close_style},
- {"sub", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"sup", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"table", B8(01100),'R', Html_tag_open_table, Html_tag_content_table, NULL},
- {"tbody", B8(01010),'O', Html_tag_open_tbody, Html_tag_content_tbody, NULL},
- {"td", B8(01110),'O', Html_tag_open_td, Html_tag_content_td, NULL},
- {"textarea", B8(01011),'R', Html_tag_open_textarea, Html_tag_content_textarea,
-                             Html_tag_close_textarea},
- {"tfoot", B8(01010),'O', Html_tag_open_tfoot, NULL, NULL},
- {"th", B8(01110),'O', Html_tag_open_th, Html_tag_content_th, NULL},
- {"thead", B8(01010),'O', Html_tag_open_thead, NULL, NULL},
- {"title", B8(10011),'R', Html_tag_open_title, NULL, Html_tag_close_title},
- {"tr", B8(01100),'O', Html_tag_open_tr, Html_tag_content_tr, NULL},
- {"tt", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"u", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"ul", B8(01100),'R', Html_tag_open_ul, NULL, NULL},
- {"var", B8(01011),'R', Html_tag_open_default, NULL, NULL},
- {"video", B8(01111),'R', Html_tag_open_video, NULL, Html_tag_close_media},
- {"wbr", B8(01011),'F', Html_tag_open_default, Html_tag_content_wbr, NULL}
+ {"pre", B8(010110),'R',2, Html_tag_open_pre, Html_tag_close_pre},
+ {"q", B8(010101),'R',2, Html_tag_open_q, Html_tag_close_q},
+ {"s", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"samp", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"script", B8(111001),'R',2, Html_tag_open_script, Html_tag_close_script},
+ {"select", B8(010101),'R',2, Html_tag_open_select, Html_tag_close_select},
+ {"small", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"span", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"strike", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"strong", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"style", B8(100101),'R',2, Html_tag_open_style, Html_tag_close_style},
+ {"sub", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"sup", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"table", B8(011010),'R',5, Html_tag_open_table, Html_tag_close_center},
+ /* tbody */
+ {"td", B8(011110),'O',3, Html_tag_open_td, Html_tag_close_default},
+ {"textarea", B8(010101),'R',2,Html_tag_open_textarea,Html_tag_close_textarea},
+ /* tfoot */
+ {"th", B8(011110),'O',1, Html_tag_open_th, Html_tag_close_default},
+ /* thead */
+ {"title", B8(100101),'R',2, Html_tag_open_title, Html_tag_close_title},
+ {"tr", B8(011010),'O',4, Html_tag_open_tr, Html_tag_close_default},
+ {"tt", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"u", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default},
+ {"ul", B8(011010),'R',2, Html_tag_open_ul, Html_tag_close_default},
+ {"var", B8(010101),'R',2, Html_tag_open_default, Html_tag_close_default}
+
 };
 #define NTAGS (sizeof(Tags)/sizeof(Tags[0]))
 
-/* Only available in C++11 and up */
-#if __cpp_static_assert
-static_assert(NTAGS == HTML_NTAGS,
-   "Mismatch between number of tags in Tags and HTML_NTAGS");
-#endif
 
 /*
  * Compares tag from buffer ('/' or '>' or space-ended string) [p1]
@@ -3595,16 +3250,16 @@ static_assert(NTAGS == HTML_NTAGS,
 static int Html_tag_compare(const char *p1, const char *p2)
 {
    while ( *p2 ) {
-      if (D_ASCII_TOLOWER(*p1) != *p2)
-         return(D_ASCII_TOLOWER(*p1) - *p2);
+      if (tolower(*p1) != *p2)
+         return(tolower(*p1) - *p2);
       ++p1;
       ++p2;
    }
    return !strchr(" >/\n\r\t", *p1);
 }
 
-/**
- * Get 'tag' index.
+/*
+ * Get 'tag' index
  * return -1 if tag is not handled yet
  */
 int a_Html_tag_index(const char *tag)
@@ -3626,218 +3281,112 @@ int a_Html_tag_index(const char *tag)
    return -1;
 }
 
-/**
- * For elements with optional close, check whether is time to close,
- * by also following Firefox's de facto rules.
- * Called at open time.
- *
+/*
+ * For elements with optional close, check whether is time to close.
  * Return value: (1: Close, 0: Don't close)
  * --tuned for speed.
  */
-static int Html_triggers_optional_close(int old_idx, int cur_idx)
+static int Html_needs_optional_close(int old_idx, int cur_idx)
 {
-   int Flags = Tags[cur_idx].Flags;
+   static int i_P = -1, i_LI, i_TD, i_TR, i_TH, i_DD, i_DT, i_OPTION;
+               // i_THEAD, i_TFOOT, i_COLGROUP;
+
+   if (i_P == -1) {
+    /* initialize the indexes of elements with optional close */
+    i_P  = a_Html_tag_index("p"),
+    i_LI = a_Html_tag_index("li"),
+    i_TD = a_Html_tag_index("td"),
+    i_TR = a_Html_tag_index("tr"),
+    i_TH = a_Html_tag_index("th"),
+    i_DD = a_Html_tag_index("dd"),
+    i_DT = a_Html_tag_index("dt"),
+    i_OPTION = a_Html_tag_index("option");
+    // i_THEAD = a_Html_tag_index("thead");
+    // i_TFOOT = a_Html_tag_index("tfoot");
+    // i_COLGROUP = a_Html_tag_index("colgroup");
+   }
+
    if (old_idx == i_P || old_idx == i_DT) {
-      /* P and DT are closed by block elements (i.e. non inline)*/
-      return (!(Flags & 1));
+      /* P and DT are closed by block elements */
+      return (Tags[cur_idx].Flags & 2);
    } else if (old_idx == i_LI) {
-      /* LI closes LI
-       * Note: non-flow should also close it, but FF does not. */
+      /* LI closes LI */
       return (cur_idx == i_LI);
    } else if (old_idx == i_TD || old_idx == i_TH) {
-      /* TD and TH are closed by: TD, TH and TR.
-       * Note: non-flow should also close it, but FF does not. */
-      return (cur_idx == i_TD || cur_idx == i_TH || cur_idx == i_TR || cur_idx == i_TBODY);
+      /* TD and TH are closed by TD, TH and TR */
+      return (cur_idx == i_TD || cur_idx == i_TH || cur_idx == i_TR);
    } else if (old_idx == i_TR) {
       /* TR closes TR */
-      return (cur_idx == i_TR || cur_idx == i_TBODY);
-   } else if (old_idx == i_DD) {
+      return (cur_idx == i_TR);
+   } else if (old_idx ==  i_DD) {
       /* DD is closed by DD and DT */
       return (cur_idx == i_DD || cur_idx == i_DT);
-   } else if (old_idx == i_OPTGROUP) {
-      /* i_OPTGROUP can only contain OPTION */
-      return (cur_idx != i_OPTION);
-   } else if (old_idx == i_OPTION) {
+   } else if (old_idx ==  i_OPTION) {
       return 1;  // OPTION always needs close
    }
 
-   /* Don't close HTML, HEAD and BODY. They're handled by Html_test_section().
-    * TODO: TBODY is pending */
+   /* HTML, HEAD, BODY are handled by Html_test_section(), not here. */
+   /* TODO: TBODY is pending */
    return 0;
 }
 
-/**
- * Check nesting and cross-nesting between BUTTON, SELECT, TEXTAREA and A.
- * The cleanup process will close any of them before opening another.
- * This is not an HTML SPEC restriction , but it avoids lots of trouble
- * inside dillo (concurrent inputs), and makes almost no sense to have.
- * return: index of the open element, -1 if none.
- */
-static inline int Html_forbids_cross_nesting(const int InFlags,
-                                             const int new_idx)
-{
-   int f = InFlags, ni = new_idx, oi = -1;
-   if (f & (IN_A | IN_BUTTON | IN_SELECT | IN_TEXTAREA) &&
-       (ni == i_A || ni == i_BUTTON || ni == i_SELECT || ni == i_TEXTAREA))
-      oi = (f & IN_A ? i_A : f & IN_BUTTON ? i_BUTTON : f & IN_SELECT ?
-            i_SELECT : f & IN_TEXTAREA ? i_TEXTAREA : 0);
-   return oi;
-}
 
-/**
- * Cleanup the stack to a given index.
+/*
+ * Conditional cleanup of the stack (at open time).
+ * - This helps catching block elements inside inline containers (a BUG).
+ * - It also closes elements with "optional" close tag.
  *
- * 's_idx' stack index to clean up to.
- * 'new_idx' is the tag index that triggered the cleanup.
- * 'fi' forbidden tag index. -1 if allowed (most of the time).
- * 'op' cleanup operation. {'o' =  open, 'c' = close}.
- */
-static void Html_tag_cleanup_to_idx(DilloHtml *html, int s_idx,
-                                    int new_idx, int fi, char op)
-{
-   int s_top, ni = new_idx;
-   while ((s_top = html->stack->size() - 1) >= s_idx) {
-      int toptag_idx = S_TOP(html)->tag_idx;
-      TagInfo toptag = Tags[toptag_idx];
-
-      if (fi >= 0) {
-         // forbidden nesting
-         if (toptag_idx != fi)
-            BUG_MSG("   Nesting cleanup - forcing close of open tag: <%s>.",
-                    toptag.name);
-      } else if (s_top == s_idx && op == 'c') {
-         // target tag, no bug when closing.
-      } else if (toptag.EndTag == 'O') {
-         // optional close, that's OK
-      } else if ((!(toptag.Flags & 4) &&
-                  (Tags[ni].Flags & 4 || !(Tags[ni].Flags & 1))) ||
-                 (Tags[ni].Flags & 1 && !(toptag.Flags & 2))) {
-         // block {element, container} in non block container or
-         // inline element in non inline container
-         BUG_MSG((op == 'o') ?
-            "Bad nesting:  <%s> can't contain <%s>.  -- closing <%s>." :
-            "<%s> needs to be closed before </%s>.  -- closing <%s>.",
-            toptag.name, Tags[ni].name, toptag.name);
-      } else {
-         BUG_MSG(
-            "<%s> should have been closed before </%s>.  -- closing <%s>.",
-            toptag.name, Tags[ni].name, toptag.name);
-      }
-      _MSG("op(%c): %s s_top=%d s_idx=%d\n", op, toptag.name, s_top, s_idx);
-      if (toptag_idx == i_BODY &&
-          !((html->InFlags & IN_EOF) || html->ReqTagClose)) {
-         (s_idx == 1 ? html->PrevWasHtmlClose : html->PrevWasBodyClose) = true;
-         break; // only pop {BODY,HTML} upon EOF or redundancy
-      }
-      if (toptag.close)
-         toptag.close(html);
-      Html_real_pop_tag(html);
-   }
-}
-
-/**
- * Conditional cleanup of the stack (at open time). Handles:
- *  - Forbidden cross nesting (a BUG).
- *  - Block elements inside non block containers (a BUG).
- *  - Elements with "optional" close tag (OK).
+ * This function is called when opening a block element or <OPTION>.
  *
- * This function is called before opening/pushing a new tag into the stack.
- * 'ni' is the new tag's index in Tags[].
+ * It searches the stack closing open inline containers, and closing
+ * elements with optional close tag when necessary.
+ *
+ * Note: OPTION is the only non-block element with an optional close.
  */
-static void Html_stack_cleanup_at_open(DilloHtml *html, int ni)
+static void Html_stack_cleanup_at_open(DilloHtml *html, int new_idx)
 {
+   /* We know that the element we're about to push is a block element.
+    * (except for OPTION, which is an empty inline, so is closed anyway)
+    * Notes:
+    *   Its 'tag' is not yet pushed into the stack,
+    *   'new_idx' is its index inside Tags[].
+    */
+
    if (!html->TagSoup)
       return;
 
-   int s_top = html->stack->size() - 1, s_idx;
-   int fi = Html_forbids_cross_nesting(html->InFlags, ni);
-   for (s_idx = s_top;  s_idx > 0;  --s_idx) {
-      int ti = html->stack->getRef(s_idx)->tag_idx;
+   while (html->stack->size() > 1) {
+      int oldtag_idx = S_TOP(html)->tag_idx;
 
-      if (fi >= 0) {
-         // forbidden cross nesting found
-         if (ti != fi)
-            continue; // don't allow, close
-         --s_idx;
-         BUG_MSG("Forbidden nesting: <%s> can't contain <%s>.  -- closing "
-                 "<%s>.", Tags[fi].name, Tags[ni].name, Tags[fi].name);
-
-      } else if ((html->InFlags & IN_PRE) && ni == i_HR) {
-         break;   // allow Apache's bad HTML directory listings...
-
-      } else if (Tags[ti].EndTag == 'O') {    // Element with optional close
-         if (Html_triggers_optional_close(ti, ni))
-            continue;   // close
-      } else if (!(Tags[ni].Flags & 1) && !(Tags[ti].Flags & 4)) {
-         // Block element over a NON block container
-         if (ti == i_A && html->DocTypeVersion >= 5.0f)
+      if (Tags[oldtag_idx].EndTag == 'O') {    // Element with optional close
+         if (!Html_needs_optional_close(oldtag_idx, new_idx))
             break;
-         continue;   // close
-      }
-
-      break;
-   }
-
-   if (s_idx < s_top)
-      Html_tag_cleanup_to_idx(html, s_idx + 1, ni, fi, 'o');
-}
-
-/**
- * Conditional cleanup of the stack, called before closing any tag.
- *
- * There are several ways of doing it. Considering the HTML 4.01 spec
- * which defines optional close tags, and the will to deliver useful diagnose
- * messages for bad-formed HTML, it'll go as follows:
- *
- *   1. Search the stack for a matching tag by closing elements that:
- *      have optional close | are inline in a block container | force closing.
- *   2. If it exists, clean all the tags in between.
- *   3. Cleanup the matching tag. (on error, give a warning message)
- */
-static void Html_tag_cleanup_at_close(DilloHtml *html, int new_idx)
-{
-   int stack_idx, tag_idx, matched = 0, expected = 0;
-   TagInfo new_tag = Tags[new_idx];
-
-   /* Look for the candidate tag to close */
-   stack_idx = html->stack->size();
-   while (--stack_idx) {
-      tag_idx = html->stack->getRef(stack_idx)->tag_idx;
-      if (tag_idx == new_idx) {
-         /* matching tag found */
-         matched = 1;
-         break;
-      } else if (Tags[tag_idx].EndTag == 'O') {
-         /* close elements with optional close */
-         continue;
-      } else if ((new_idx == i_A && html->InFlags & IN_A) ||
-                 (new_idx == i_BUTTON && html->InFlags & IN_BUTTON) ||
-                 (new_idx == i_SELECT && html->InFlags & IN_SELECT) ||
-                 (new_idx == i_TEXTAREA && html->InFlags & IN_TEXTAREA)) {
-         /* Let these elements close anything left open inside them */
-         continue;
-      } else if (Tags[new_idx].Flags & 4 &&   // Block container
-                 Tags[stack_idx].Flags & 3) { // Inline element or container
-         /* Let a block container close inline elements left open inside it. */
-         continue;
-      } else {
-         /* this is the tag that should have been closed */
-         expected = 1;
+      } else if (Tags[oldtag_idx].Flags & 8) { // Block container
          break;
       }
-   }
 
-   if (matched) {
-      Html_tag_cleanup_to_idx(html, stack_idx, new_idx, -1, 'c');
-   } else if (expected) {
-      BUG_MSG("Unexpected closing tag: </%s> -- expected </%s>.",
-              new_tag.name, Tags[tag_idx].name);
-   } else {
-      BUG_MSG("Unexpected closing tag: </%s>.", new_tag.name);
+      /* we have an inline (or empty) container... */
+      if (Tags[oldtag_idx].EndTag == 'R') {
+         BUG_MSG("<%s> is not allowed to contain <%s>. -- closing <%s>\n",
+                 Tags[oldtag_idx].name, Tags[new_idx].name,
+                 Tags[oldtag_idx].name);
+      }
+
+      /* Workaround for Apache and its bad HTML directory listings... */
+      if ((html->InFlags & IN_PRE) &&
+          strcmp(Tags[new_idx].name, "hr") == 0)
+         break;
+      /* Avoid OPTION closing SELECT */
+      if ((html->InFlags & IN_SELECT) &&
+          strcmp(Tags[new_idx].name,"option") == 0)
+         break;
+
+      /* This call closes the top tag only. */
+      Html_tag_cleanup_at_close(html, oldtag_idx);
    }
 }
 
-/**
+/*
  * HTML, HEAD and BODY elements have optional open and close tags.
  * Handle this "magic" here.
  */
@@ -3847,8 +3396,7 @@ static void Html_test_section(DilloHtml *html, int new_idx, int IsCloseTag)
    int tag_idx;
 
    if (!(html->InFlags & IN_HTML) && html->DocType == DT_NONE)
-      BUG_MSG("The required DOCTYPE declaration is missing. "
-              "Handling as HTML4.");
+      BUG_MSG("the required DOCTYPE declaration is missing (or invalid)\n");
 
    if (!(html->InFlags & IN_HTML)) {
       tag = "<html>";
@@ -3861,9 +3409,9 @@ static void Html_test_section(DilloHtml *html, int new_idx, int IsCloseTag)
       }
    }
 
-   if (Tags[new_idx].Flags & 16) {
+   if (Tags[new_idx].Flags & 32) {
       /* head element */
-      if (!(html->InFlags & IN_HEAD) && html->Num_HEAD == 0) {
+      if (!(html->InFlags & IN_HEAD)) {
          tag = "<head>";
          tag_idx = a_Html_tag_index(tag + 1);
          if (tag_idx != new_idx || IsCloseTag) {
@@ -3874,7 +3422,7 @@ static void Html_test_section(DilloHtml *html, int new_idx, int IsCloseTag)
          }
       }
 
-   } else if (Tags[new_idx].Flags & 8) {
+   } else if (Tags[new_idx].Flags & 16) {
       /* body element */
       if (html->InFlags & IN_HEAD) {
          tag = "</head>";
@@ -3892,18 +3440,18 @@ static void Html_test_section(DilloHtml *html, int new_idx, int IsCloseTag)
    }
 }
 
-/**
+/*
  * Parse attributes that can appear on any tag.
  */
 static void Html_parse_common_attrs(DilloHtml *html, char *tag, int tagsize)
 {
    const char *attrbuf;
-   char lang[3];
 
    if (tagsize >= 8 &&        /* length of "<t id=i>" */
-       (attrbuf = a_Html_get_attr(html, tag, tagsize, "id"))) {
+       (attrbuf = Html_get_attr2(html, tag, tagsize, "id",
+                                 HTML_LeftTrim | HTML_RightTrim))) {
       /* According to the SGML declaration of HTML 4, all NAME values
-       * occurring outside entities must be converted to uppercase
+       * occuring outside entities must be converted to uppercase
        * (this is what "NAMECASE GENERAL YES" says). But the HTML 4
        * spec states in Sec. 7.5.2 that anchor ids are case-sensitive.
        * So we don't do it and hope for better specs in the future ...
@@ -3915,115 +3463,27 @@ static void Html_parse_common_attrs(DilloHtml *html, char *tag, int tagsize)
 
    if (tagsize >= 11 && (prefs.parse_embedded_css || prefs.load_stylesheets)) {
       /* length of "<t class=i>" or "<t style=i>" */
-      attrbuf = a_Html_get_attr(html, tag, tagsize, "class");
+      attrbuf = Html_get_attr2(html, tag, tagsize, "class",
+                               HTML_LeftTrim | HTML_RightTrim);
       if (attrbuf)
          html->styleEngine->setClass (attrbuf);
 
-      attrbuf = a_Html_get_attr(html, tag, tagsize, "style");
+      attrbuf = Html_get_attr2(html, tag, tagsize, "style",
+                               HTML_LeftTrim | HTML_RightTrim);
       if (attrbuf)
          html->styleEngine->setStyle (attrbuf);
    }
 
-   /* handle "xml:lang" and "lang" attributes
-    * We use only the first two chars of the value to deal with
-    * extended language tags (see http://www.rfc-editor.org/rfc/bcp/bcp47.txt)
-    */
-   memset(lang, 0, sizeof(lang));
-   if (tagsize >= 14) {
-      /* length of "<t xml:lang=i>" */
-      attrbuf = a_Html_get_attr(html, tag, tagsize, "xml:lang");
-      if (attrbuf)
-         strncpy(lang, attrbuf, 2);
-   }
-   if (!lang[0] && tagsize >= 10) { /* 'xml:lang' prevails over 'lang' */
-      /* length of "<t lang=i>" */
-      attrbuf = a_Html_get_attr(html, tag, tagsize, "lang");
-      if (attrbuf)
-         strncpy(lang, attrbuf, 2);
-   }
-   if (lang[0])
-      html->styleEngine->setNonCssHint(PROPERTY_X_LANG, CSS_TYPE_STRING, lang);
 }
 
-/**
- * Warn when encountering elements that are obsolete in HTML5. This list
- * was from the "W3C Candidate Recommendation 6 August 2013".
- */
-static void Html_check_html5_obsolete(DilloHtml *html, int ni)
-{
-   static int indexes[9] = {-1};
-
-   if (indexes[0] == -1) {
-      indexes[0] = a_Html_tag_index("dir");
-      indexes[1] = a_Html_tag_index("frame");
-      indexes[2] = a_Html_tag_index("frameset");
-      indexes[3] = a_Html_tag_index("isindex");
-      indexes[4] = a_Html_tag_index("strike");
-      indexes[5] = a_Html_tag_index("big");
-      indexes[6] = a_Html_tag_index("center");
-      indexes[7] = a_Html_tag_index("font");
-      indexes[8] = a_Html_tag_index("tt");
-   }
-   for (int i = 0; i < 9; i++) {
-      if (indexes[i] == ni) {
-         BUG_MSG("<%s> is obsolete in HTML5.", Tags[ni].name);
-         break;
-      }
-   }
-}
-
-static void Html_display_block(DilloHtml *html)
-{
-   Html_add_textblock(html, Html_must_add_breaks (html), 0,
-                      false /* Perhaps true for widgets oof? */);
-}
-
-static void Html_display_inline_block(DilloHtml *html)
-{
-   Html_add_textblock(html, false, 0, true);
-}
-
-static void Html_display_listitem(DilloHtml *html)
-{
-   Style *style = html->style ();
-   Style *wordStyle = html->wordStyle ();
-   Widget **ref_list_item;
-   ListItem *list_item;
-   int *list_number;
-   char buf[16];
-
-   /* Get our parent tag's variables (used as state storage) */
-   list_number = &html->stack->getRef(html->stack->size()-2)->list_number;
-   ref_list_item = &html->stack->getRef(html->stack->size()-2)->ref_list_item;
-
-   HT2TB(html)->addParbreak (0, wordStyle);
-
-   list_item = new ListItem ((ListItem*)*ref_list_item,prefs.limit_text_width);
-   HT2TB(html)->addWidget (list_item, style);
-   HT2TB(html)->addParbreak (0, wordStyle);
-   *ref_list_item = list_item;
-   S_TOP(html)->textblock = html->dw = list_item;
-
-   if (style->listStyleType == LIST_STYLE_TYPE_NONE) {
-      // none
-   } else if (style->listStyleType >= LIST_STYLE_TYPE_DECIMAL) {
-      // ordered
-      numtostr((*list_number)++, buf, 16, style->listStyleType);
-      list_item->initWithText (buf, wordStyle);
-   } else {
-      // unordered
-      list_item->initWithWidget (new Bullet(), wordStyle);
-   }
-}
-
-/**
+/*
  * Process a tag, given as 'tag' and 'tagsize'. -- tagsize is [1 based]
  * ('tag' must include the enclosing angle brackets)
  * This function calls the right open or close function for the tag.
  */
 static void Html_process_tag(DilloHtml *html, char *tag, int tagsize)
 {
-   int ti, ni;           /* stack tag index and new tag index */
+   int ci, ni;           /* current and new tag indexes */
    char *start = tag + 1; /* discard the '<' */
    int IsCloseTag = (*start == '/');
 
@@ -4033,89 +3493,51 @@ static void Html_process_tag(DilloHtml *html, char *tag, int tagsize)
    if (ni == -1) {
       /* TODO: doctype parsing is a bit fuzzy, but enough for the time being */
       if (!(html->InFlags & IN_HTML)) {
-         if (tagsize > 9 && !dStrnAsciiCasecmp(tag, "<!doctype", 9))
+         if (tagsize > 9 && !dStrncasecmp(tag, "<!doctype", 9))
             Html_parse_doctype(html, tag, tagsize);
       }
       /* Ignore unknown tags */
       return;
    }
-   _MSG("Html_process_tag: %s%s\n", IsCloseTag ? "/" : "", Tags[ni].name);
-
-   if (!IsCloseTag && html->DocType == DT_HTML && html->DocTypeVersion >= 5.0f)
-      Html_check_html5_obsolete(html, ni);
-
-   int i = html->PrevWasHtmlClose ? 1 : html->PrevWasBodyClose ? 2 : 0;
-   if (i == 1 || (i == 2 && ni != i_HTML))
-      BUG_MSG("Content after </%s> tag.", i == 1 ? "html" : "body");
-   html->PrevWasHtmlClose = html->PrevWasBodyClose = false;
 
    /* Handle HTML, HEAD and BODY. Elements with optional open and close */
    if (!(html->InFlags & IN_BODY) /* && parsing HTML */)
       Html_test_section(html, ni, IsCloseTag);
 
    /* Tag processing */
-   ti = S_TOP(html)->tag_idx;
+   ci = S_TOP(html)->tag_idx;
    switch (IsCloseTag) {
    case 0:
       /* Open function */
 
-      /* Cleanup before opening a new tag */
-      if (ti != -1)
+      /* Cleanup when opening a block element, or
+       * when openning over an element with optional close */
+      if (Tags[ni].Flags & 2 || (ci != -1 && Tags[ci].EndTag == 'O'))
          Html_stack_cleanup_at_open(html, ni);
 
-      /* TODO: this is only raising a warning, but allows the element.
-       * Note: Apache uses IMG inside PRE. */
-      if ((html->InFlags & IN_PRE) && Html_tag_pre_excludes(html, ni))
-         BUG_MSG("<pre> is not allowed to contain <%s>.", Tags[ni].name);
+      /* TODO: this is only raising a warning, take some defined action.
+       * Note: apache uses IMG inside PRE (we could use its "alt"). */
+      if ((html->InFlags & IN_PRE) && Html_tag_pre_excludes(ni))
+         BUG_MSG("<pre> is not allowed to contain <%s>\n", Tags[ni].name);
 
       /* Push the tag into the stack */
       Html_push_tag(html, ni);
 
-      html->startElement (ni);
+      html->styleEngine->startElement (ni);
       _MSG("Open : %*s%s\n", html->stack->size(), " ", Tags[ni].name);
 
       /* Parse attributes that can appear on any tag */
       Html_parse_common_attrs(html, tag, tagsize);
 
       /* Call the open function for this tag */
-      _MSG("Html_process_tag Open : %s\n", Tags[ni].name);
+      _MSG("Open : %s\n", Tags[ni].name);
       Tags[ni].open (html, tag, tagsize);
-
-      if (! S_TOP(html)->display_none) {
-         switch (html->style ()->display) {
-            case DISPLAY_BLOCK:
-               Html_display_block(html);
-               break;
-            case DISPLAY_INLINE_BLOCK:
-               Html_display_inline_block(html);
-               break;
-            case DISPLAY_LIST_ITEM:
-               Html_display_listitem(html);
-               break;
-            case DISPLAY_NONE:
-               S_TOP(html)->display_none = true;
-               break;
-            case DISPLAY_INLINE:
-               if (html->style()->vloat != FLOAT_NONE)
-                  Html_display_block(html);
-               break;
-            default:
-               break;
-         }
-
-         if (Tags[ni].content && ! S_TOP(html)->display_none) {
-            Tags[ni].content (html, tag, tagsize);
-         }
-      }
-
       if (html->stop_parser)
          break;
 
-      if (S_TOP(html)->parse_mode == DILLO_HTML_PARSE_MODE_VERBATIM) {
-         /* don't change anything */
-      } else if (S_TOP(html)->parse_mode != DILLO_HTML_PARSE_MODE_PRE &&
-          (html->style ()->whiteSpace == WHITE_SPACE_PRE ||
-           html->style ()->whiteSpace == WHITE_SPACE_PRE_WRAP)) {
+      if (S_TOP(html)->parse_mode != DILLO_HTML_PARSE_MODE_PRE &&
+          (html->styleEngine->style ()->whiteSpace == WHITE_SPACE_PRE ||
+           html->styleEngine->style ()->whiteSpace == WHITE_SPACE_PRE_WRAP)) {
          S_TOP(html)->parse_mode = DILLO_HTML_PARSE_MODE_PRE;
          html->pre_column = 0;
          html->PreFirstChar = true;
@@ -4127,11 +3549,10 @@ static void Html_process_tag(DilloHtml *html, char *tag, int tagsize)
       /* Request immediate close for elements with forbidden close tag. */
       /* TODO: XHTML always requires close tags. A simple implementation
        * of the commented clause below will make it work. */
-      if (/* parsing HTML && */ Tags[ni].EndTag == 'F')
+      if  (/* parsing HTML && */ Tags[ni].EndTag == 'F')
          html->ReqTagClose = true;
 
       /* Don't break! Open tags may also close themselves */
-      /* fallthrough */
 
    default:
       /* Close function */
@@ -4143,7 +3564,7 @@ static void Html_process_tag(DilloHtml *html, char *tag, int tagsize)
            (strchr(" \"'", tag[tagsize-3]) ||                   /* [ "']/> */
             (size_t)tagsize == strlen(Tags[ni].name) + 3))) {   /*  <x/>   */
 
-         _MSG("Html_process_tag Close: %s\n", Tags[ni].name);
+         _MSG("Close: %s\n", Tags[ni].name);
          Html_tag_cleanup_at_close(html, ni);
          /* This was a close tag */
          html->ReqTagClose = false;
@@ -4151,7 +3572,7 @@ static void Html_process_tag(DilloHtml *html, char *tag, int tagsize)
    }
 }
 
-/**
+/*
  * Get attribute value for 'attrname' and return it.
  *  Tags start with '<' and end with a '>' (Ex: "<P align=center>")
  *  tagsize = strlen(tag) from '<' to '>', inclusive.
@@ -4167,7 +3588,7 @@ static const char *Html_get_attr2(DilloHtml *html,
                                   const char *attrname,
                                   int tag_parsing_flags)
 {
-   int i, entsize, Found = 0, delimiter = 0, attr_pos = 0;
+   int i, isocode, entsize, Found = 0, delimiter = 0, attr_pos = 0;
    Dstr *Buf = html->attr_data;
    DilloHtmlTagParsingState state = SEEK_ATTR_START;
 
@@ -4185,18 +3606,12 @@ static const char *Html_get_attr2(DilloHtml *html,
          break;
 
       case MATCH_ATTR_NAME:
-         if (!attrname[attr_pos] &&
-             (tag[i] == '=' || isspace(tag[i]) || tag[i] == '>')) {
-            Found = 1;
+         if ((Found = (!(attrname[attr_pos]) &&
+                       (tag[i] == '=' || isspace(tag[i]) || tag[i] == '>')))) {
             state = SEEK_TOKEN_START;
             --i;
-         } else if (!tag[i]) {
-            state = SEEK_ATTR_START; // NULL byte is not allowed
-         } else {
-            if (D_ASCII_TOLOWER(tag[i]) != D_ASCII_TOLOWER(attrname[attr_pos]))
-               state = SEEK_ATTR_START;
-            attr_pos++;
-         }
+         } else if (tolower(tag[i]) != tolower(attrname[attr_pos++]))
+            state = SEEK_ATTR_START;
          break;
 
       case SEEK_TOKEN_START:
@@ -4226,12 +3641,16 @@ static const char *Html_get_attr2(DilloHtml *html,
             state = FINISHED;
          } else if (tag[i] == '&' &&
                     (tag_parsing_flags & HTML_ParseEntities)) {
-            const char *entstr;
-            const bool_t is_attr = TRUE;
-
-            if ((entstr = Html_parse_entity(html, tag+i, tagsize-i, &entsize,
-                                            is_attr))) {
-               dStr_append(Buf, entstr);
+            if ((isocode = Html_parse_entity(html, tag+i,
+                                             tagsize-i, &entsize)) >= 0) {
+               if (isocode >= 128) {
+                  char buf[4];
+                  int k, n = a_Utf8_encode(isocode, buf);
+                  for (k = 0; k < n; ++k)
+                     dStr_append_c(Buf, buf[k]);
+               } else {
+                  dStr_append_c(Buf, (char) isocode);
+               }
                i += entsize-1;
             } else {
                dStr_append_c(Buf, tag[i]);
@@ -4261,7 +3680,7 @@ static const char *Html_get_attr2(DilloHtml *html,
    return (Found) ? Buf->str : NULL;
 }
 
-/**
+/*
  * Call Html_get_attr2 telling it to parse entities and strip the result
  */
 const char *a_Html_get_attr(DilloHtml *html,
@@ -4273,7 +3692,7 @@ const char *a_Html_get_attr(DilloHtml *html,
                          HTML_LeftTrim | HTML_RightTrim | HTML_ParseEntities);
 }
 
-/**
+/*
  * "a_Html_get_attr with default"
  * Call a_Html_get_attr() and dStrdup() the returned string.
  * If the attribute isn't found a copy of 'def' is returned.
@@ -4289,13 +3708,13 @@ char *a_Html_get_attr_wdef(DilloHtml *html,
    return attrbuf ? dStrdup(attrbuf) : dStrdup(def);
 }
 
-/**
- * Dispatch the appropriate function for 'Op'.
+/*
+ * Dispatch the apropriate function for 'Op'
  * This function is a Cache client and gets called whenever new data arrives
- * @param Op      operation to perform.
- * @param CbData  a pointer to a DilloHtml structure
- * @param Buf     a pointer to new data
- * @param BufSize new data size (in bytes)
+ *  Op      : operation to perform.
+ *  CbData  : a pointer to a DilloHtml structure
+ *  Buf     : a pointer to new data
+ *  BufSize : new data size (in bytes)
  */
 static void Html_callback(int Op, CacheClient_t *Client)
 {
@@ -4309,7 +3728,7 @@ static void Html_callback(int Op, CacheClient_t *Client)
    }
 }
 
-/**
+/*
  * Here's where we parse the html and put it into the Textblock structure.
  * Return value: number of bytes parsed
  */
@@ -4373,7 +3792,7 @@ static int Html_write_raw(DilloHtml *html, char *buf, int bufsize, int Eof)
                buf_index = bufsize;
          } else {
             /* Tag: search end of tag (skipping over quoted strings) */
-            html->CurrOfs = html->Start_Ofs + token_start;
+            html->CurrTagOfs = html->Start_Ofs + token_start;
 
             while ( buf_index < bufsize ) {
                buf_index++;
@@ -4394,15 +3813,15 @@ static int Html_write_raw(DilloHtml *html, char *buf, int bufsize, int Eof)
                      if (buf[offset] == ch || !buf[offset]) {
                         buf_index = offset;
                      } else {
-                        BUG_MSG("Attribute lacks closing quote.");
+                        BUG_MSG("attribute lacks closing quote\n");
                         break;
                      }
                   }
                } else if (ch == '<') {
                   /* unterminated tag detected */
                   p = dStrndup(buf+token_start+1,
-                               strcspn(buf+token_start+1, " <\n\r\t"));
-                  BUG_MSG("<%s> lacks its closing '>'.", p);
+                               strcspn(buf+token_start+1, " <"));
+                  BUG_MSG("<%s> element lacks its closing '>'\n", p);
                   dFree(p);
                   --buf_index;
                   break;
@@ -4417,8 +3836,6 @@ static int Html_write_raw(DilloHtml *html, char *buf, int bufsize, int Eof)
          }
       } else {
          /* A Word: search for whitespace or tag open */
-         html->CurrOfs = html->Start_Ofs + token_start;
-
          while (++buf_index < bufsize) {
             buf_index += strcspn(buf + buf_index, " <\n\r\t\f\v");
             if (buf[buf_index] == '<' && (ch = buf[buf_index + 1]) &&

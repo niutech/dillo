@@ -25,7 +25,6 @@ public:
    bool usesViewport ();
    int getHScrollbarThickness ();
    int getVScrollbarThickness ();
-   int getScrollbarOnLeft ();
    void scrollTo (int x, int y);
    void setViewportSize (int width, int height,
                          int hScrollbarThickness, int vScrollbarThickness);

@@ -16,8 +16,7 @@ extern "C" {
  */
 void a_Imgbuf_ref(void *v_imgbuf);
 void a_Imgbuf_unref(void *v_imgbuf);
-void *a_Imgbuf_new(void *v_ir, int img_type, uint_t width, uint_t height,
-                   double gamma);
+void *a_Imgbuf_new(void *v_dw, int img_type, uint_t width, uint_t height);
 int a_Imgbuf_last_reference(void *v_imgbuf);
 void a_Imgbuf_update(void *v_imgbuf, const uchar_t *buf, DilloImgType type,
                      uchar_t *cmap, uint_t width, uint_t height, uint_t y);

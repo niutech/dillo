@@ -1,16 +1,3 @@
-/*
- * File: html_common.hh
- *
- * Copyright (C) 2008-2016 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2008-2014 Johannes Hofmann <Johannes.Hofmann@gmx.de>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 3 of the License, or
- * (at your option) any later version.
- */
-
 #ifndef __HTML_COMMON_HH__
 #define __HTML_COMMON_HH__
 
@@ -32,29 +19,30 @@
  * Macros
  */
 
-/** "html struct" to Textblock */
+// "html struct" to Textblock
 #define HT2TB(html)  ((Textblock*)(html->dw))
-/** "html struct" to "Layout" */
+// "html struct" to "Layout"
 #define HT2LT(html)  ((Layout*)html->bw->render_layout)
-/** "Image" to "Dw Widget" */
+// "Image" to "Dw Widget"
 #define IM2DW(Image)  ((Widget*)Image->dw)
-/** Top of the parsing stack */
+// Top of the parsing stack
 #define S_TOP(html)  (html->stack->getRef(html->stack->size()-1))
 
-/** Add a bug-meter message. */
+// Add a bug-meter message.
 #define BUG_MSG(...)                               \
    D_STMT_START {                                  \
          html->bugMessage(__VA_ARGS__);            \
    } D_STMT_END
 
-
 /*
  * Typedefs
  */
 
+typedef struct _DilloHtmlImage   DilloHtmlImage;
+typedef struct _DilloHtmlState   DilloHtmlState;
+
 typedef enum {
    DT_NONE,
-   DT_UNRECOGNIZED,
    DT_HTML,
    DT_XHTML
 } DilloHtmlDocumentType;
@@ -69,10 +57,10 @@ typedef enum {
 } DilloHtmlParseMode;
 
 typedef enum {
-   DILLO_HTML_TABLE_MODE_NONE,  /**< no table at all */
-   DILLO_HTML_TABLE_MODE_TOP,   /**< outside of <tr> */
-   DILLO_HTML_TABLE_MODE_TR,    /**< inside of <tr>, outside of <td> */
-   DILLO_HTML_TABLE_MODE_TD     /**< inside of <td> */
+   DILLO_HTML_TABLE_MODE_NONE,  /* no table at all */
+   DILLO_HTML_TABLE_MODE_TOP,   /* outside of <tr> */
+   DILLO_HTML_TABLE_MODE_TR,    /* inside of <tr>, outside of <td> */
+   DILLO_HTML_TABLE_MODE_TD     /* inside of <td> */
 } DilloHtmlTableMode;
 
 typedef enum {
@@ -94,49 +82,44 @@ typedef enum {
    IN_FORM        = 1 << 3,
    IN_SELECT      = 1 << 4,
    IN_OPTION      = 1 << 5,
-   IN_OPTGROUP    = 1 << 6,
-   IN_TEXTAREA    = 1 << 7,
-   IN_BUTTON      = 1 << 8,
-   IN_MAP         = 1 << 9,
-   IN_PRE         = 1 << 10,
-   IN_LI          = 1 << 11,
-   IN_MEDIA       = 1 << 12,
-   IN_META_HACK   = 1 << 13,
-   IN_A           = 1 << 14,
-   IN_EOF         = 1 << 15,
+   IN_TEXTAREA    = 1 << 6,
+   IN_MAP         = 1 << 7,
+   IN_PRE         = 1 << 8,
+   IN_BUTTON      = 1 << 9,
+   IN_LI          = 1 << 10,
 } DilloHtmlProcessingState;
 
 /*
  * Data Structures
  */
 
-typedef struct {
+struct _DilloHtmlImage {
    DilloUrl *url;
    DilloImage *image;
-} DilloHtmlImage;
+};
 
-typedef struct {
+struct _DilloHtmlState {
    DilloHtmlParseMode parse_mode;
    DilloHtmlTableMode table_mode;
    DilloHtmlTableBorderMode table_border_mode;
    bool cell_text_align_set;
-   bool display_none;
+
    DilloHtmlListMode list_type;
    int list_number;
 
-   /** TagInfo index for the tag that's being processed */
+   /* TagInfo index for the tag that's being processed */
    int tag_idx;
 
    dw::core::Widget *textblock, *table;
 
-   /** This is used to align list items (especially in enumerated lists) */
+   /* This is used to align list items (especially in enumerated lists) */
    dw::core::Widget *ref_list_item;
 
-   /** This is used for list items etc. If it is set to TRUE, breaks
+   /* This is used for list items etc; if it is set to TRUE, breaks
       have to be "handed over" (see Html_add_indented and
       Html_eventually_pop_dw). */
    bool hand_over_break;
-} DilloHtmlState;
+};
 
 /*
  * Classes
@@ -170,7 +153,8 @@ public:  //BUG: for now everything is public
    char *content_type, *charset;
    bool stop_parser;
 
-   size_t CurrOfs, OldOfs, OldLine;
+   size_t CurrTagOfs;
+   size_t OldTagOfs, OldTagLine;
 
    DilloHtmlDocumentType DocType; /* as given by DOCTYPE tag */
    float DocTypeVersion;          /* HTML or XHTML version number */
@@ -181,31 +165,28 @@ public:  //BUG: for now everything is public
    lout::misc::SimpleVector<DilloHtmlState> *stack;
    StyleEngine *styleEngine;
 
-   int InFlags; /**< tracks which elements we are in */
+   int InFlags; /* tracks which elements we are in */
 
    Dstr *Stash;
    bool StashSpace;
 
-   int pre_column;        /**< current column, used in PRE tags with tabs */
-   bool PreFirstChar;     /**< used to skip the first CR or CRLF in PRE tags */
-   bool PrevWasCR;        /**< Flag to help parsing of "\r\n" in PRE tags */
-   bool PrevWasOpenTag;   /**< Flag to help deferred parsing of white space */
-   bool InVisitedLink;    /**< used to 'contrast_visited_colors' */
-   bool ReqTagClose;      /**< Flag to close the stack's top tag */
-   bool TagSoup;          /**< Flag to enable the parser's cleanup functions */
-   bool loadCssFromStash; /**< current stash content should be loaded as CSS */
-   bool PrevWasBodyClose; /**< set when </body> is found */
-   bool PrevWasHtmlClose; /**< set when </html> is found */
+   int pre_column;        /* current column, used in PRE tags with tabs */
+   bool PreFirstChar;     /* used to skip the first CR or CRLF in PRE tags */
+   bool PrevWasCR;        /* Flag to help parsing of "\r\n" in PRE tags */
+   bool PrevWasOpenTag;   /* Flag to help deferred parsing of white space */
+   bool InVisitedLink;    /* used to 'contrast_visited_colors' */
+   bool ReqTagClose;      /* Flag to help handling bad-formed HTML */
+   bool TagSoup;          /* Flag to enable the parser's cleanup functions */
+   bool loadCssFromStash; /* current stash content should be loaded as CSS */
 
-   /** element counters: used for validation purposes.
-    * ATM they're used as three state flags {0,1,>1} */
+   /* element counters: used for validation purposes */
    uchar_t Num_HTML, Num_HEAD, Num_BODY, Num_TITLE;
 
-   Dstr *attr_data;       /**< Buffer for attribute value */
+   Dstr *attr_data;       /* Buffer for attribute value */
 
-   int32_t non_css_link_color; /**< as provided by link attribute in BODY */
-   int32_t non_css_visited_color; /**< as provided by vlink attribute in BODY */
-   int32_t visited_color; /**< as computed according to CSS */
+   int32_t non_css_link_color; /* as provided by link attribute in BODY */
+   int32_t non_css_visited_color; /* as provided by vlink attribute in BODY */
+   int32_t visited_color; /* as computed according to CSS */
 
    /* -------------------------------------------------------------------*/
    /* Variables required after parsing (for page functionality)          */
@@ -226,7 +207,7 @@ public:
    void bugMessage(const char *format, ... );
    void connectSignals(dw::core::Widget *dw);
    void write(char *Buf, int BufSize, int Eof);
-   int getCurrLineNumber();
+   int getCurTagLineNumber();
    void finishParsing(int ClientKey);
    int formNew(DilloHtmlMethod method, const DilloUrl *action,
                DilloHtmlEnc enc, const char *charset);
@@ -234,22 +215,6 @@ public:
    bool_t unloadedImages();
    void loadImages (const DilloUrl *pattern);
    void addCssUrl(const DilloUrl *url);
-
-   // useful shortcuts
-   inline void startElement (int tag)
-   { styleEngine->startElement (tag, bw); }
-   inline void startElement (const char *tagname)
-   { styleEngine->startElement (tagname, bw); }
-
-   inline dw::core::style::Style *backgroundStyle ()
-   { return styleEngine->backgroundStyle (bw); }
-   inline dw::core::style::Style *style ()
-   { return styleEngine->style (bw); }
-   inline dw::core::style::Style *wordStyle ()
-   { return styleEngine->wordStyle (bw); }
-
-   inline void restyle () { styleEngine->restyle (bw); }
-
 };
 
 /*
@@ -273,15 +238,15 @@ DilloUrl *a_Html_url_new(DilloHtml *html,
                          const char *url_str, const char *base_url,
                          int use_base_url);
 
-void a_Html_common_image_attrs(DilloHtml *html, const char *tag, int tagsize);
-DilloImage *a_Html_image_new(DilloHtml *html, const char *tag, int tagsize);
+DilloImage *a_Html_image_new(DilloHtml *html, const char *tag,
+                             int tagsize, DilloUrl *url);
 
 char *a_Html_parse_entities(DilloHtml *html, const char *token, int toksize);
 void a_Html_pop_tag(DilloHtml *html, int TagIdx);
 void a_Html_stash_init(DilloHtml *html);
-int32_t a_Html_color_parse(DilloHtml *html, const char *str,
-                           int32_t default_color);
-CssLength a_Html_parse_length (DilloHtml *html,
+int32_t a_Html_color_parse(DilloHtml *html,
+                           const char *subtag, int32_t default_color);
+dw::core::style::Length a_Html_parse_length (DilloHtml *html,
                                              const char *attr);
 void a_Html_tag_set_align_attr(DilloHtml *html, const char *tag, int tagsize);
 bool a_Html_tag_set_valign_attr(DilloHtml *html,

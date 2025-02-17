@@ -94,7 +94,7 @@ namespace core {
  * the link handling state.
  *
  * The general selection works, for events not pointing on links, like
- * this (numbers in parentheses after the event denote the button, "n"
+ * this (numbers in parantheses after the event denote the button, "n"
  * means arbitrary button):
  *
  * \dot
@@ -178,7 +178,7 @@ namespace core {
 class SelectionState
 {
 public:
-   enum { END_OF_WORD = 1 << 30 };
+   enum { END_OF_WORD =  1 << 30 };
 
 private:
    Layout *layout;
@@ -235,7 +235,7 @@ public:
                      int linkNo, MousePositionEvent *event);
 };
 
-} // namespace core
 } // namespace dw
+} // namespace core
 
 #endif // __DW_SELECTION_H__

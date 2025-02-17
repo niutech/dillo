@@ -2,7 +2,6 @@
  * File: plain.cc
  *
  * Copyright (C) 2005-2007 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -10,8 +9,7 @@
  * (at your option) any later version.
  */
 
-/**
- * @file
+/*
  * Module for decoding a text/plain object into a dw widget.
  */
 
@@ -25,8 +23,8 @@
 
 #include "uicmd.hh"
 
-#include "dw/core.hh"
-#include "dw/textblock.hh"
+#include "../dw/core.hh"
+#include "../dw/textblock.hh"
 
 // Dw to Textblock
 #define DW2TB(dw)  ((Textblock*)dw)
@@ -54,7 +52,6 @@ public:
    style::Style *widgetStyle;
    size_t Start_Ofs;    /* Offset of where to start reading next */
    int state;
-   long currentLine;
 
    DilloPlain(BrowserWindow *bw);
    ~DilloPlain();
@@ -83,7 +80,7 @@ static void Plain_callback(int Op, CacheClient_t *Client);
 void a_Plain_free(void *data);
 
 
-/**
+/*
  * Diplain constructor.
  */
 DilloPlain::DilloPlain(BrowserWindow *p_bw)
@@ -96,15 +93,13 @@ DilloPlain::DilloPlain(BrowserWindow *p_bw)
    dw = new Textblock (prefs.limit_text_width);
    Start_Ofs = 0;
    state = ST_SeekingEol;
-   currentLine = 0L;
 
    Layout *layout = (Layout*) bw->render_layout;
-   // TODO (1x) No URL?
-   StyleEngine styleEngine (layout, NULL, NULL, bw->zoom);
+   StyleEngine styleEngine (layout);
 
-   styleEngine.startElement ("body", bw);
-   styleEngine.startElement ("pre", bw);
-   widgetStyle = styleEngine.wordStyle (bw);
+   styleEngine.startElement ("body");
+   styleEngine.startElement ("pre");
+   widgetStyle = styleEngine.wordStyle ();
    widgetStyle->ref ();
 
    /* The context menu */
@@ -114,7 +109,7 @@ DilloPlain::DilloPlain(BrowserWindow *p_bw)
    dw->setDeleteCallback(a_Plain_free, this);
 }
 
-/**
+/*
  * Free memory used by the DilloPlain class.
  */
 DilloPlain::~DilloPlain()
@@ -123,7 +118,7 @@ DilloPlain::~DilloPlain()
    widgetStyle->unref();
 }
 
-/**
+/*
  * Receive the mouse button press event
  */
 bool DilloPlain::PlainLinkReceiver::press (Widget *widget, int, int, int, int,
@@ -141,21 +136,14 @@ bool DilloPlain::PlainLinkReceiver::press (Widget *widget, int, int, int, int,
 void DilloPlain::addLine(char *Buf, uint_t BufSize)
 {
    int len;
-   char buf[129];
+   char buf[128];
    char *end = Buf + BufSize;
-
-   currentLine++; /* Start at 1 */
-   sprintf(buf, "L%ld", currentLine); /* Always fits */
-   DW2TB(dw)->addAnchor(buf, widgetStyle);
 
    if (BufSize > 0) {
       // Limit word length to avoid X11 coordinate
       // overflow with extremely long lines.
-      while ((len = a_Misc_expand_tabs(&Buf, end, buf, sizeof(buf) - 1))) {
-         assert ((uint_t)len < sizeof(buf));
-         buf[len] = '\0';
+      while ((len = a_Misc_expand_tabs(&Buf, end, buf, sizeof(buf))))
          DW2TB(dw)->addText(buf, len, widgetStyle);
-      }
    } else {
       // Add dummy word for empty lines - otherwise the parbreak is ignored.
       DW2TB(dw)->addText("", 0, widgetStyle);
@@ -164,7 +152,7 @@ void DilloPlain::addLine(char *Buf, uint_t BufSize)
    DW2TB(dw)->addParbreak(0, widgetStyle);
 }
 
-/**
+/*
  * Here we parse plain text and put it into the page structure.
  * (This function is called by Plain_callback whenever there's new data)
  */
@@ -205,7 +193,7 @@ void DilloPlain::write(void *Buf, uint_t BufSize, int Eof)
    DW2TB(dw)->flush();
 }
 
-/**
+/*
  * Set callback function and callback data for "text/" MIME major-type.
  */
 void *a_Plain_text(const char *type, void *P, CA_Callback_t *Call, void **Data)
@@ -225,7 +213,7 @@ void a_Plain_free(void *data)
    delete ((DilloPlain *)data);
 }
 
-/**
+/*
  * This function is a cache client
  */
 static void Plain_callback(int Op, CacheClient_t *Client)

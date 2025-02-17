@@ -11,8 +11,8 @@
 
 #include "msg.h"
 #include "imgbuf.hh"
-#include "dw/core.hh"
-#include "dw/image.hh"
+#include "../dw/core.hh"
+#include "../dw/image.hh"
 
 using namespace dw::core;
 
@@ -70,7 +70,7 @@ static uchar_t *Imgbuf_rgb_line(const uchar_t *buf,
 
 // Wrappers for Imgbuf -------------------------------------------------------
 
-/**
+/*
  * Increment reference count for an Imgbuf
  */
 void a_Imgbuf_ref(void *v_imgbuf)
@@ -78,7 +78,7 @@ void a_Imgbuf_ref(void *v_imgbuf)
    ((Imgbuf*)v_imgbuf)->ref();
 }
 
-/**
+/*
  * Decrement reference count for an Imgbuf
  */
 void a_Imgbuf_unref(void *v_imgbuf)
@@ -87,12 +87,12 @@ void a_Imgbuf_unref(void *v_imgbuf)
       ((Imgbuf*)v_imgbuf)->unref();
 }
 
-/**
+/*
  * Create a new Imgbuf
  */
-void *a_Imgbuf_new(void *layout, int img_type, uint_t width, uint_t height,
-                   double gamma)
+void *a_Imgbuf_new(void *v_dw, int img_type, uint_t width, uint_t height)
 {
+   Layout *layout = ((Widget*)v_dw)->getLayout();
    if (!layout) {
       MSG_ERR("a_Imgbuf_new: layout is NULL.\n");
       exit(1);
@@ -103,11 +103,10 @@ void *a_Imgbuf_new(void *layout, int img_type, uint_t width, uint_t height,
       linebuf = (uchar_t*) dRealloc(linebuf, linebuf_size);
    }
 
-   return (void*)((Layout*)layout)->createImgbuf(Imgbuf::RGB, width, height,
-                                                 gamma);
+   return (void*)layout->createImgbuf(Imgbuf::RGB, width, height);
 }
 
-/**
+/*
  * Last reference for this Imgbuf?
  */
 int a_Imgbuf_last_reference(void *v_imgbuf)
@@ -115,7 +114,7 @@ int a_Imgbuf_last_reference(void *v_imgbuf)
    return ((Imgbuf*)v_imgbuf)->lastReference () ? 1 : 0;
 }
 
-/**
+/*
  * Update the root buffer of an imgbuf.
  */
 void a_Imgbuf_update(void *v_imgbuf, const uchar_t *buf, DilloImgType type,
@@ -129,7 +128,7 @@ void a_Imgbuf_update(void *v_imgbuf, const uchar_t *buf, DilloImgType type,
    ((Imgbuf*)v_imgbuf)->copyRow(y, (byte *)newbuf);
 }
 
-/**
+/*
  * Reset for a new scan from a multiple-scan image.
  */
 void a_Imgbuf_new_scan(void *v_imgbuf)

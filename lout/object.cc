@@ -20,9 +20,7 @@
 
 
 #include "object.hh"
-#include "dlib/dlib.h"
 #include <stdio.h>
-#include <stdint.h>
 #include <config.h>
 
 namespace lout {
@@ -84,7 +82,7 @@ const char *Object::toString()
    /** \todo garbage! */
    misc::StringBuffer sb;
    intoStringBuffer(&sb);
-   char *s = dStrdup(sb.getChars());
+   char *s = strdup(sb.getChars());
    return s;
 }
 
@@ -95,9 +93,7 @@ const char *Object::toString()
  */
 void Object::intoStringBuffer(misc::StringBuffer *sb)
 {
-   sb->append("<not further specified object ");
-   sb->appendPointer(this);
-   sb->append(">");
+   sb->append("<not further specified object>");
 }
 
 /**
@@ -108,45 +104,6 @@ size_t Object::sizeOf()
    fprintf (stderr, "Object::sizeOf() should be implemented.\n");
    return sizeof(Object*);
 }
-
-// ----------------
-//    Comparator
-// ----------------
-
-Comparator *Comparator::compareFunComparator = NULL;
-
-/**
- * \brief This static method may be used as compare function for
- *    qsort(3) and bsearch(3), for an array of Object* (Object*[] or
- *    Object**).
- *
- * "compareFunComparator" should be set before.
- *
- * \todo Not reentrant. Consider switching to reentrant variants
- * (qsort_r), and compare function with an additional argument.
- */
-int Comparator::compareFun(const void *p1, const void *p2)
-{
-   return compareFunComparator->compare (*(Object**)p1, *(Object**)p2);
-}
-
-// ------------------------
-//    StandardComparator
-// ------------------------
-
-int StandardComparator::compare(Object *o1, Object *o2)
-{
-   if (o1 && o2)
-      return ((Comparable*)o1)->compareTo ((Comparable*)o2);
-   else if (o1)
-      return 1;
-   else if (o2)
-      return -1;
-   else
-      return 0;
-}
-
-StandardComparator standardComparator;
 
 // -------------
 //    Pointer
@@ -164,25 +121,19 @@ int Pointer::hashValue()
  *  if (sizeof (int) == sizeof (void*))
  *     return (int)value;
  *  else
- *     return ((int*)&value)[0] ^ ((int*)&value)[1];
+ *     return ((int*)value)[0] ^ ((int*)value)[1];
  */
 #if SIZEOF_VOID_P == 4
-   // Assuming that sizeof(void*) == sizeof(int); on 32 bit systems.
    return (int)value;
 #else
-   // Assuming that sizeof(void*) == 2 * sizeof(int); on 64 bit
-   // systems (int is still 32 bit).
-   // Combine both parts of the pointer value *itself*, not what it
-   // points to, by first referencing it (operator "&"), then
-   // dereferencing it again (operator "[]").
-   return ((intptr_t)value >> 32) ^ ((intptr_t)value);
+   return ((int*)value)[0] ^ ((int*)value)[1];
 #endif
 }
 
 void Pointer::intoStringBuffer(misc::StringBuffer *sb)
 {
    char buf[64];
-   snprintf(buf, sizeof(buf), "%p", value);
+   snprintf(buf, sizeof(buf), "0x%p", value);
    sb->append(buf);
 }
 
@@ -210,32 +161,6 @@ void Integer::intoStringBuffer(misc::StringBuffer *sb)
 int Integer::compareTo(Comparable *other)
 {
    return value - ((Integer*)other)->value;
-}
-
-// -------------
-//    Boolean
-// -------------
-
-bool Boolean::equals(Object *other)
-{
-   bool value2 = ((Boolean*)other)->value;
-   // TODO Does "==" work?
-   return (value && value2) || (!value && value2);
-}
-
-int Boolean::hashValue()
-{
-   return value ? 1 : 0;
-}
-
-void Boolean::intoStringBuffer(misc::StringBuffer *sb)
-{
-   sb->append(value ? "true" : "false");
-}
-
-int Boolean::compareTo(Comparable *other)
-{
-   return (value ? 1 : 0) - (((Boolean*)other)->value ? 1 : 0);
 }
 
 // -----------------
@@ -292,7 +217,7 @@ void ConstString::intoStringBuffer(misc::StringBuffer *sb)
 //    String
 // ------------
 
-String::String (const char *str): ConstString (str ? dStrdup(str) : NULL)
+String::String (const char *str): ConstString (str ? strdup(str) : NULL)
 {
 }
 

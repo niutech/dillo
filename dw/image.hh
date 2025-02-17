@@ -116,12 +116,11 @@ public:
  *
  * \sa\ref dw-images-and-backgrounds
  */
-class Image: public core::Widget, public core::ImgRenderer
+class Image: public core::Widget
 {
 private:
    char *altText;
    core::Imgbuf *buffer;
-   int bufWidth, bufHeight;
    int altTextWidth;
    bool clicking;
    int currLink;
@@ -130,13 +129,10 @@ private:
    bool isMap;
 
 protected:
-   void sizeRequestSimpl (core::Requisition *requisition);
-   void getExtremesSimpl (core::Extremes *extremes);
+   void sizeRequestImpl (core::Requisition *requisition);
    void sizeAllocateImpl (core::Allocation *allocation);
-   void containerSizeChangedForChildren ();
-   
-   void draw (core::View *view, core::Rectangle *area,
-              core::DrawingContext *context);
+
+   void draw (core::View *view, core::Rectangle *area);
 
    bool buttonPressImpl (core::EventButton *event);
    bool buttonReleaseImpl (core::EventButton *event);
@@ -154,19 +150,12 @@ public:
    Image(const char *altText);
    ~Image();
 
-   // For images, the minimal width is not well defined, and
-   // correction of the size makes not much sense.
-   virtual bool getAdjustMinWidth () { return false; }
-
    core::Iterator *iterator (core::Content::Type mask, bool atEnd);
 
    inline core::Imgbuf *getBuffer () { return buffer; }
    void setBuffer (core::Imgbuf *buffer, bool resize = false);
 
    void drawRow (int row);
-
-   void finish ();
-   void fatal ();
 
    void setIsMap ();
    void setUseMap (ImageMapsList *list, Object *key);

@@ -5,8 +5,6 @@
 #   error Do not include this file directly, use "core.hh" instead.
 #endif
 
-#include "../lout/debug.hh"
-
 namespace dw {
 namespace core {
 
@@ -65,7 +63,7 @@ namespace core {
  *
  * \code
  * dw::core::Imgbuf *curBuf, *oldBuf;
- * int width, height,
+ * int width, heigt,
  * // ...
  * oldBuf = curBuf;
  * curBuf = oldBuf->getScaledBuf(oldBuf, width, height);
@@ -163,16 +161,6 @@ class Imgbuf: public lout::object::Object, public lout::signal::ObservedObject
 public:
    enum Type { RGB, RGBA, GRAY, INDEXED, INDEXED_ALPHA };
 
-   inline Imgbuf () {
-      DBG_OBJ_CREATE ("dw::core::Imgbuf");
-      DBG_OBJ_BASECLASS (lout::object::Object);
-      DBG_OBJ_BASECLASS (lout::signal::ObservedObject);
-   }
-
-   inline ~Imgbuf () {
-      DBG_OBJ_DELETE ();
-   }
-
    /*
     * Methods called from the image decoding
     */
@@ -187,21 +175,8 @@ public:
 
    virtual Imgbuf* getScaledBuf (int width, int height) = 0;
    virtual void getRowArea (int row, dw::core::Rectangle *area) = 0;
-   virtual int getRootWidth () = 0;
-   virtual int getRootHeight () = 0;
-
-
-   /**
-    * Creates an image buffer with same parameters (type, gamma etc.)
-    * except size.
-    */
-   virtual Imgbuf *createSimilarBuf (int width, int height) = 0;
-
-   /**
-    * Copies another image buffer into this image buffer.
-    */
-   virtual void copyTo (Imgbuf *dest, int xDestRoot, int yDestRoot,
-                        int xSrc, int ySrc, int widthSrc, int heightSrc) = 0;
+   virtual int  getRootWidth () = 0;
+   virtual int  getRootHeight () = 0;
 
    /*
     * Reference counting.
@@ -227,7 +202,7 @@ public:
    virtual bool isReferred () = 0;
 };
 
-} // namespace core
 } // namespace dw
+} // namespace core
 
 #endif // __DW_IMGBUF_HH__

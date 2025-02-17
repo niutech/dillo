@@ -23,7 +23,7 @@ public:
        */
       RESTART,
 
-      /** \brief The pattern does not at all occur in the text. */
+      /** \brief The patten does not at all occur in the text. */
       NOT_FOUND
    } Result;
 
@@ -78,7 +78,7 @@ public:
    void resetSearch ();
 };
 
-} // namespace core
 } // namespace dw
+} // namespace core
 
 #endif // __DW_FINDTEXT_STATE_H__

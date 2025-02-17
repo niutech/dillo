@@ -18,8 +18,6 @@ public:
    ListItem(ListItem *ref, bool limitTextWidth);
    ~ListItem();
 
-   bool usesMaxGeneratorWidth ();
-
    void initWithWidget (core::Widget *widget, core::style::Style *style);
    void initWithText (const char *text, core::style::Style *style);
 };

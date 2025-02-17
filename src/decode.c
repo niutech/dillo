@@ -20,11 +20,10 @@
 
 static const int bufsize = 8*1024;
 
-/**
- * Decode 'Transfer-Encoding: chunked' data
+/*
+ * Decode chunked data
  */
-Dstr *a_Decode_transfer_process(DecodeTransfer *dc, const char *instr,
-                                int inlen)
+static Dstr *Decode_chunked(Decode *dc, const char *instr, int inlen)
 {
    char *inputPtr, *eol;
    int inputRemaining;
@@ -67,7 +66,6 @@ Dstr *a_Decode_transfer_process(DecodeTransfer *dc, const char *instr,
       }
 
       if (!(chunkRemaining = strtol(inputPtr, NULL, 0x10))) {
-         dc->finished = TRUE;
          break;   /* A chunk length of 0 means we're done! */
       }
       inputRemaining -= (eol - inputPtr) + 1;
@@ -82,33 +80,13 @@ Dstr *a_Decode_transfer_process(DecodeTransfer *dc, const char *instr,
    return output;
 }
 
-bool_t a_Decode_transfer_finished(DecodeTransfer *dc)
-{
-   return dc->finished;
-}
-
-void a_Decode_transfer_free(DecodeTransfer *dc)
+static void Decode_chunked_free(Decode *dc)
 {
    dFree(dc->state);
    dStr_free(dc->leftover, 1);
-   dFree(dc);
-}
-
-static void Decode_compression_free(Decode *dc)
-{
-   (void)inflateEnd((z_stream *)dc->state);
-
-   dFree(dc->state);
-   dFree(dc->buffer);
 }
 
 /*
- * BUG: A fair amount of duplicated code exists in the gzip/deflate decoding,
- * but an attempt to pull out the common code left everything too contorted
- * for what it accomplished.
- */
-
-/**
  * Decode gzipped data
  */
 static Dstr *Decode_gzip(Decode *dc, const char *instr, int inlen)
@@ -144,95 +122,15 @@ static Dstr *Decode_gzip(Decode *dc, const char *instr, int inlen)
    return output;
 }
 
-/**
- * Decode (raw) deflated data
- */
-static Dstr *Decode_raw_deflate(Decode *dc, const char *instr, int inlen)
+static void Decode_gzip_free(Decode *dc)
 {
-   int rc = Z_OK;
+   (void)inflateEnd((z_stream *)dc->state);
 
-   z_stream *zs = (z_stream *)dc->state;
-
-   int inputConsumed = 0;
-   Dstr *output = dStr_new("");
-
-   while ((rc == Z_OK) && (inputConsumed < inlen)) {
-      zs->next_in = (Bytef *)instr + inputConsumed;
-      zs->avail_in = inlen - inputConsumed;
-
-      zs->next_out = (Bytef *)dc->buffer;
-      zs->avail_out = bufsize;
-
-      rc = inflate(zs, Z_SYNC_FLUSH);
-
-      dStr_append_l(output, dc->buffer, zs->total_out);
-
-      if ((rc == Z_OK) || (rc == Z_STREAM_END)) {
-         // Z_STREAM_END at end of file
-
-         inputConsumed += zs->total_in;
-         zs->total_out = 0;
-         zs->total_in = 0;
-      } else if (rc == Z_DATA_ERROR) {
-         MSG_ERR("raw deflate decompression also failed\n");
-      }
-   }
-   return output;
+   dFree(dc->state);
+   dFree(dc->buffer);
 }
 
-/**
- * Decode deflated data, initially presuming that the required zlib wrapper
- * is there. On data error, switch to Decode_raw_deflate().
- */
-static Dstr *Decode_deflate(Decode *dc, const char *instr, int inlen)
-{
-   int rc = Z_OK;
-
-   z_stream *zs = (z_stream *)dc->state;
-
-   int inputConsumed = 0;
-   Dstr *output = dStr_new("");
-
-   while ((rc == Z_OK) && (inputConsumed < inlen)) {
-      zs->next_in = (Bytef *)instr + inputConsumed;
-      zs->avail_in = inlen - inputConsumed;
-
-      zs->next_out = (Bytef *)dc->buffer;
-      zs->avail_out = bufsize;
-
-      rc = inflate(zs, Z_SYNC_FLUSH);
-
-      dStr_append_l(output, dc->buffer, zs->total_out);
-
-      if ((rc == Z_OK) || (rc == Z_STREAM_END)) {
-         // Z_STREAM_END at end of file
-
-         inputConsumed += zs->total_in;
-         zs->total_out = 0;
-         zs->total_in = 0;
-      } else if (rc == Z_DATA_ERROR) {
-         MSG_WARN("Deflate decompression error. Certain servers illegally fail"
-                 " to send data in a zlib wrapper. Let's try raw deflate.\n");
-         dStr_free(output, 1);
-         (void)inflateEnd(zs);
-         dFree(dc->state);
-         dc->state = zs = dNew(z_stream, 1);
-         zs->zalloc = NULL;
-         zs->zfree = NULL;
-         zs->next_in = NULL;
-         zs->avail_in = 0;
-         dc->decode = Decode_raw_deflate;
-
-         // Negative value means that we want raw deflate.
-         inflateInit2(zs, -MAX_WBITS);
-
-         return Decode_raw_deflate(dc, instr, inlen);
-      }
-   }
-   return output;
-}
-
-/**
+/*
  * Translate to desired character set (UTF-8)
  */
 static Dstr *Decode_charset(Decode *dc, const char *instr, int inlen)
@@ -285,69 +183,56 @@ static void Decode_charset_free(Decode *dc)
    dStr_free(dc->leftover, 1);
 }
 
-/**
+/*
  * Initialize transfer decoder. Currently handles "chunked".
  */
-DecodeTransfer *a_Decode_transfer_init(const char *format)
+Decode *a_Decode_transfer_init(const char *format)
 {
-   DecodeTransfer *dc = NULL;
+   Decode *dc = NULL;
 
-   if (format && !dStrAsciiCasecmp(format, "chunked")) {
+   if (format && !dStrcasecmp(format, "chunked")) {
       int *chunk_remaining = dNew(int, 1);
       *chunk_remaining = 0;
-      dc = dNew(DecodeTransfer, 1);
+      dc = dNew(Decode, 1);
       dc->leftover = dStr_new("");
       dc->state = chunk_remaining;
-      dc->finished = FALSE;
+      dc->decode = Decode_chunked;
+      dc->free = Decode_chunked_free;
+      dc->buffer = NULL; /* not used */
       _MSG("chunked!\n");
    }
    return dc;
 }
 
-static Decode *Decode_content_init_common(void)
-{
-   z_stream *zs = dNew(z_stream, 1);
-   Decode *dc = dNew(Decode, 1);
-
-   zs->zalloc = NULL;
-   zs->zfree = NULL;
-   zs->next_in = NULL;
-   zs->avail_in = 0;
-   dc->state = zs;
-   dc->buffer = dNew(char, bufsize);
-
-   dc->free = Decode_compression_free;
-   dc->leftover = NULL; /* not used */
-   return dc;
-}
-
-/**
- * Initialize content decoder. Currently handles 'gzip' and 'deflate'.
+/*
+ * Initialize content decoder. Currently handles gzip.
+ *
+ * zlib is also capable of handling "deflate"/zlib-encoded data, but web
+ * servers have not standardized on whether to send such data with a header.
  */
 Decode *a_Decode_content_init(const char *format)
 {
-   z_stream *zs;
    Decode *dc = NULL;
 
    if (format && *format) {
-      if (!dStrAsciiCasecmp(format, "gzip") ||
-          !dStrAsciiCasecmp(format, "x-gzip")) {
+      if (!dStrcasecmp(format, "gzip") || !dStrcasecmp(format, "x-gzip")) {
+         z_stream *zs;
          _MSG("gzipped data!\n");
 
-         dc = Decode_content_init_common();
-         zs = (z_stream *)dc->state;
+         dc = dNew(Decode, 1);
+         dc->buffer = dNew(char, bufsize);
+         dc->state = zs = dNew(z_stream, 1);
+         zs->zalloc = NULL;
+         zs->zfree = NULL;
+         zs->next_in = NULL;
+         zs->avail_in = 0;
+
          /* 16 is a magic number for gzip decoding */
          inflateInit2(zs, MAX_WBITS+16);
 
          dc->decode = Decode_gzip;
-      } else if (!dStrAsciiCasecmp(format, "deflate")) {
-         _MSG("deflated data!\n");
-
-         dc = Decode_content_init_common();
-         zs = (z_stream *)dc->state;
-         inflateInit(zs);
-
-         dc->decode = Decode_deflate;
+         dc->free = Decode_gzip_free;
+         dc->leftover = NULL; /* not used */
       } else {
          MSG("Content-Encoding '%s' not recognized.\n", format);
       }
@@ -355,7 +240,25 @@ Decode *a_Decode_content_init(const char *format)
    return dc;
 }
 
-/**
+/*
+ * Legal names for the ASCII character set
+ */
+static int Decode_is_ascii(const char *str)
+{
+   return (!(dStrcasecmp(str, "ASCII") &&
+             dStrcasecmp(str, "US-ASCII") &&
+             dStrcasecmp(str, "us") &&
+             dStrcasecmp(str, "IBM367") &&
+             dStrcasecmp(str, "cp367") &&
+             dStrcasecmp(str, "csASCII") &&
+             dStrcasecmp(str, "ANSI_X3.4-1968") &&
+             dStrcasecmp(str, "iso-ir-6") &&
+             dStrcasecmp(str, "ANSI_X3.4-1986") &&
+             dStrcasecmp(str, "ISO_646.irv:1991") &&
+             dStrcasecmp(str, "ISO646-US")));
+}
+
+/*
  * Initialize decoder to translate from any character set known to iconv()
  * to UTF-8.
  *
@@ -368,7 +271,8 @@ Decode *a_Decode_charset_init(const char *format)
 
    if (format &&
        strlen(format) &&
-       dStrAsciiCasecmp(format,"UTF-8")) {
+       dStrcasecmp(format,"UTF-8") &&
+       !Decode_is_ascii(format)) {
 
       iconv_t ic = iconv_open("UTF-8", format);
       if (ic != (iconv_t) -1) {
@@ -386,7 +290,7 @@ Decode *a_Decode_charset_init(const char *format)
    return dc;
 }
 
-/**
+/*
  * Decode data.
  */
 Dstr *a_Decode_process(Decode *dc, const char *instr, int inlen)

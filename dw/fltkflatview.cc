@@ -20,7 +20,6 @@
 
 
 #include "fltkflatview.hh"
-#include "../lout/debug.hh"
 
 #include <stdio.h>
 
@@ -32,7 +31,6 @@ namespace fltk {
 FltkFlatView::FltkFlatView (int x, int y, int w, int h, const char *label):
    FltkWidgetView (x, y, w, h, label)
 {
-   DBG_OBJ_CREATE ("dw::fltk::FltkFlatView");
 }
 
 FltkFlatView::~FltkFlatView ()
@@ -66,11 +64,6 @@ int FltkFlatView::getHScrollbarThickness ()
 }
 
 int FltkFlatView::getVScrollbarThickness ()
-{
-   return 0;
-}
-
-int FltkFlatView::getScrollbarOnLeft ()
 {
    return 0;
 }

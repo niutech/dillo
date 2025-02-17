@@ -2,7 +2,6 @@
  * Preferences parser
  *
  * Copyright (C) 2006-2009 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -10,16 +9,9 @@
  * (at your option) any later version.
  */
 
-/**
- * @file
- * Preferences parser
- */
-
 #include <sys/types.h>
 #include <stdlib.h>
 #include <locale.h>            /* for setlocale */
-#include <math.h>              /* for isinf */
-#include <limits.h>
 
 #include "prefs.h"
 #include "misc.h"
@@ -36,30 +28,93 @@ typedef enum {
    PREFS_URL,
    PREFS_INT32,
    PREFS_DOUBLE,
-   PREFS_FRACTION_100,
    PREFS_GEOMETRY,
+   PREFS_FILTER,
    PREFS_PANEL_SIZE
 } PrefType_t;
 
-typedef struct {
+typedef struct SymNode_ {
    const char *name;
    void *pref;
    PrefType_t type;
-   int count;
 } SymNode_t;
 
-/**
+/* Symbol array, sorted alphabetically */
+const SymNode_t symbols[] = {
+   { "allow_white_bg", &prefs.allow_white_bg, PREFS_BOOL },
+   { "always_show_tabs", &prefs.always_show_tabs, PREFS_BOOL },
+   { "bookmarks_file", &prefs.bookmarks_file, PREFS_STRING },
+   { "bg_color", &prefs.bg_color, PREFS_COLOR },
+   { "buffered_drawing", &prefs.buffered_drawing, PREFS_INT32 },
+   { "contrast_visited_color", &prefs.contrast_visited_color, PREFS_BOOL },
+   { "date_format", &prefs.date_format, PREFS_STRING },
+   { "enterpress_forces_submit", &prefs.enterpress_forces_submit,
+     PREFS_BOOL },
+   { "filter_auto_requests", &prefs.filter_auto_requests, PREFS_FILTER },
+   { "focus_new_tab", &prefs.focus_new_tab, PREFS_BOOL },
+   { "font_cursive", &prefs.font_cursive, PREFS_STRING },
+   { "font_default_serif", &prefs.font_default_serif, PREFS_BOOL },
+   { "font_factor", &prefs.font_factor, PREFS_DOUBLE },
+   { "font_fantasy", &prefs.font_fantasy, PREFS_STRING },
+   { "font_max_size", &prefs.font_max_size, PREFS_INT32 },
+   { "font_min_size", &prefs.font_min_size, PREFS_INT32 },
+   { "font_monospace", &prefs.font_monospace, PREFS_STRING },
+   { "font_sans_serif", &prefs.font_sans_serif, PREFS_STRING },
+   { "font_serif", &prefs.font_serif, PREFS_STRING },
+   { "fullwindow_start", &prefs.fullwindow_start, PREFS_BOOL },
+   { "geometry", NULL, PREFS_GEOMETRY },
+   { "home", &prefs.home, PREFS_URL },
+   { "http_language", &prefs.http_language, PREFS_STRING },
+   { "http_max_conns", &prefs.http_max_conns, PREFS_INT32 },
+   { "http_proxy", &prefs.http_proxy, PREFS_URL },
+   { "http_proxyuser", &prefs.http_proxyuser, PREFS_STRING },
+   { "http_referer", &prefs.http_referer, PREFS_STRING },
+   { "http_user_agent", &prefs.http_user_agent, PREFS_STRING },
+   { "limit_text_width", &prefs.limit_text_width, PREFS_BOOL },
+   { "load_images", &prefs.load_images, PREFS_BOOL },
+   { "load_stylesheets", &prefs.load_stylesheets, PREFS_BOOL },
+   { "middle_click_drags_page", &prefs.middle_click_drags_page,
+     PREFS_BOOL },
+   { "middle_click_opens_new_tab", &prefs.middle_click_opens_new_tab,
+     PREFS_BOOL },
+   { "right_click_closes_tab", &prefs.right_click_closes_tab, PREFS_BOOL },
+   { "no_proxy", &prefs.no_proxy, PREFS_STRING },
+   { "panel_size", &prefs.panel_size, PREFS_PANEL_SIZE },
+   { "parse_embedded_css", &prefs.parse_embedded_css, PREFS_BOOL },
+   { "search_url", &prefs.search_urls, PREFS_STRINGS },
+   { "show_back", &prefs.show_back, PREFS_BOOL },
+   { "show_bookmarks", &prefs.show_bookmarks, PREFS_BOOL },
+   { "show_extra_warnings", &prefs.show_extra_warnings, PREFS_BOOL },
+   { "show_filemenu", &prefs.show_filemenu, PREFS_BOOL },
+   { "show_forw", &prefs.show_forw, PREFS_BOOL },
+   { "show_help", &prefs.show_help, PREFS_BOOL },
+   { "show_home", &prefs.show_home, PREFS_BOOL },
+   { "show_msg", &prefs.show_msg, PREFS_BOOL },
+   { "show_progress_box", &prefs.show_progress_box, PREFS_BOOL },
+   { "show_quit_dialog", &prefs.show_quit_dialog, PREFS_BOOL },
+   { "show_reload", &prefs.show_reload, PREFS_BOOL },
+   { "show_search", &prefs.show_search, PREFS_BOOL },
+   { "show_stop", &prefs.show_stop, PREFS_BOOL },
+   { "show_tools", &prefs.show_tools, PREFS_BOOL },
+   { "show_tooltip", &prefs.show_tooltip, PREFS_BOOL },
+   { "show_url", &prefs.show_url, PREFS_BOOL },
+   { "show_zoom", &prefs.show_zoom, PREFS_BOOL },
+   { "small_icons", &prefs.small_icons, PREFS_BOOL },
+   { "start_page", &prefs.start_page, PREFS_URL },
+   { "w3c_plus_heuristics", &prefs.w3c_plus_heuristics, PREFS_BOOL },
+};
+
+/*
  * Parse a name/value pair and set preferences accordingly.
  */
-static int parseOption(char *name, char *value,
-                       SymNode_t *symbols, int n_symbols)
+int PrefsParser::parseOption(char *name, char *value)
 {
-   SymNode_t *node;
-   int i;
+   const SymNode_t *node;
+   uint_t i;
    int st;
 
    node = NULL;
-   for (i = 0; i < n_symbols; i++) {
+   for (i = 0; i < sizeof(symbols) / sizeof(SymNode_t); i++) {
       if (!strcmp(symbols[i].name, name)) {
          node = & (symbols[i]);
          break;
@@ -73,13 +128,11 @@ static int parseOption(char *name, char *value,
 
    switch (node->type) {
    case PREFS_BOOL:
-      *(bool_t *)node->pref = (!dStrAsciiCasecmp(value, "yes") ||
-                               !dStrAsciiCasecmp(value, "true"));
+      *(bool_t *)node->pref = (!dStrcasecmp(value, "yes") ||
+                               !dStrcasecmp(value, "true"));
       break;
    case PREFS_COLOR:
       *(int32_t *)node->pref = a_Color_parse(value, *(int32_t*)node->pref,&st);
-      if (st == 1)
-         MSG("prefs: Color '%s' not recognized.\n", value);
       break;
    case PREFS_STRING:
       dFree(*(char **)node->pref);
@@ -87,15 +140,17 @@ static int parseOption(char *name, char *value,
       break;
    case PREFS_STRINGS:
    {
+      static Dlist *last_lp;
       Dlist *lp = *(Dlist **)node->pref;
-      if (node->count == 0) {
+      if (last_lp != lp) {
          /* override the default */
-         for (i = 0; i < dList_length(lp); i++) {
+         for (int i = dList_length(lp); i >= 0; --i) {
             void *data = dList_nth_data(lp, i);
-            dList_remove(lp, data);
             dFree(data);
+            dList_remove(lp, data);
          }
       }
+      last_lp = lp;
       dList_append(lp, dStrdup(value));
       break;
    }
@@ -109,26 +164,23 @@ static int parseOption(char *name, char *value,
    case PREFS_DOUBLE:
       *(double *)node->pref = strtod(value, NULL);
       break;
-   case PREFS_FRACTION_100:
-      {
-         double d = strtod (value, NULL);
-         if (isinf(d)) {
-            if (d > 0)
-               *(int*)node->pref = INT_MAX;
-            else
-               *(int*)node->pref = INT_MIN;
-         } else
-            *(int*)node->pref = 100 * d;
-      }
-      break;
    case PREFS_GEOMETRY:
       a_Misc_parse_geometry(value, &prefs.xpos, &prefs.ypos,
                             &prefs.width, &prefs.height);
       break;
+   case PREFS_FILTER:
+      if (!dStrcasecmp(value, "same_domain"))
+         prefs.filter_auto_requests = PREFS_FILTER_SAME_DOMAIN;
+      else {
+         if (dStrcasecmp(value, "allow_all"))
+            MSG_WARN("prefs: unrecognized value for filter_auto_requests\n");
+         prefs.filter_auto_requests = PREFS_FILTER_ALLOW_ALL;
+      }
+      break;
    case PREFS_PANEL_SIZE:
-      if (!dStrAsciiCasecmp(value, "tiny"))
+      if (!dStrcasecmp(value, "tiny"))
          prefs.panel_size = P_tiny;
-      else if (!dStrAsciiCasecmp(value, "small"))
+      else if (!dStrcasecmp(value, "small"))
          prefs.panel_size = P_small;
       else /* default to "medium" */
          prefs.panel_size = P_medium;
@@ -137,120 +189,17 @@ static int parseOption(char *name, char *value,
       MSG_WARN("prefs: {%s} IS recognized but not handled!\n", name);
       break;   /* Not reached */
    }
-   node->count++;
-
    return 0;
 }
 
-/**
+/*
  * Parses the dillorc and sets the values in the prefs structure.
  */
 void PrefsParser::parse(FILE *fp)
 {
    char *line, *name, *value, *oldLocale;
-   int st, line_number = 1;
+   int st;
 
-   /* Symbol array, sorted alphabetically */
-   static SymNode_t symbols[] = {
-      { "allow_white_bg", &prefs.allow_white_bg, PREFS_BOOL, 0 },
-      { "white_bg_replacement", &prefs.white_bg_replacement, PREFS_COLOR, 0 },
-      { "bg_color", &prefs.bg_color, PREFS_COLOR, 0 },
-      { "buffered_drawing", &prefs.buffered_drawing, PREFS_INT32, 0 },
-      { "contrast_visited_color", &prefs.contrast_visited_color, PREFS_BOOL, 0 },
-      { "enterpress_forces_submit", &prefs.enterpress_forces_submit,
-        PREFS_BOOL, 0 },
-      { "focus_new_tab", &prefs.focus_new_tab, PREFS_BOOL, 0 },
-      { "font_cursive", &prefs.font_cursive, PREFS_STRING, 0 },
-      { "font_factor", &prefs.font_factor, PREFS_DOUBLE, 0 },
-      { "font_fantasy", &prefs.font_fantasy, PREFS_STRING, 0 },
-      { "font_max_size", &prefs.font_max_size, PREFS_INT32, 0 },
-      { "font_min_size", &prefs.font_min_size, PREFS_INT32, 0 },
-      { "font_monospace", &prefs.font_monospace, PREFS_STRING, 0 },
-      { "font_sans_serif", &prefs.font_sans_serif, PREFS_STRING, 0 },
-      { "font_serif", &prefs.font_serif, PREFS_STRING, 0 },
-      { "fullwindow_start", &prefs.fullwindow_start, PREFS_BOOL, 0 },
-      { "geometry", NULL, PREFS_GEOMETRY, 0 },
-      { "home", &prefs.home, PREFS_URL, 0 },
-      { "new_tab_page", &prefs.new_tab_page, PREFS_URL, 0 },
-      { "http_language", &prefs.http_language, PREFS_STRING, 0 },
-      { "http_max_conns", &prefs.http_max_conns, PREFS_INT32, 0 },
-      { "http_persistent_conns", &prefs.http_persistent_conns, PREFS_BOOL, 0 },
-      { "http_proxy", &prefs.http_proxy, PREFS_URL, 0 },
-      { "http_proxyuser", &prefs.http_proxyuser, PREFS_STRING, 0 },
-      { "http_referer", &prefs.http_referer, PREFS_STRING, 0 },
-      { "http_strict_transport_security",&prefs.http_strict_transport_security,
-        PREFS_BOOL, 0 },
-      { "http_force_https", &prefs.http_force_https, PREFS_BOOL, 0 },
-      { "http_user_agent", &prefs.http_user_agent, PREFS_STRING, 0 },
-      { "limit_text_width", &prefs.limit_text_width, PREFS_BOOL, 0 },
-      { "adjust_min_width", &prefs.adjust_min_width, PREFS_BOOL, 0 },
-      { "adjust_table_min_width", &prefs.adjust_table_min_width, PREFS_BOOL, 0 },
-      { "load_images", &prefs.load_images, PREFS_BOOL, 0 },
-      { "ignore_image_formats", &prefs.ignore_image_formats, PREFS_STRING, 0 },
-      { "load_background_images", &prefs.load_background_images, PREFS_BOOL, 0 },
-      { "load_stylesheets", &prefs.load_stylesheets, PREFS_BOOL, 0 },
-      { "middle_click_drags_page", &prefs.middle_click_drags_page,
-        PREFS_BOOL, 0 },
-      { "middle_click_opens_new_tab", &prefs.middle_click_opens_new_tab,
-        PREFS_BOOL, 0 },
-      { "right_click_closes_tab", &prefs.right_click_closes_tab, PREFS_BOOL, 0 },
-      { "scroll_switches_tabs", &prefs.scroll_switches_tabs, PREFS_BOOL, 0 },
-      { "scroll_switches_tabs_reverse", &prefs.scroll_switches_tabs_reverse, PREFS_BOOL, 0 },
-      { "no_proxy", &prefs.no_proxy, PREFS_STRING, 0 },
-      { "panel_size", &prefs.panel_size, PREFS_PANEL_SIZE, 0 },
-      { "parse_embedded_css", &prefs.parse_embedded_css, PREFS_BOOL, 0 },
-      { "save_dir", &prefs.save_dir, PREFS_STRING, 0 },
-      { "scroll_step", &prefs.scroll_step, PREFS_INT32, 0 },
-      { "scroll_page_overlap", &prefs.scroll_page_overlap, PREFS_INT32, 0 },
-      { "scrollbar_on_left", &prefs.scrollbar_on_left, PREFS_BOOL, 0 },
-      { "scrollbar_page_mode", &prefs.scrollbar_page_mode, PREFS_BOOL, 0 },
-      { "search_url", &prefs.search_urls, PREFS_STRINGS, 0 },
-      { "show_back", &prefs.show_back, PREFS_BOOL, 0 },
-      { "show_bookmarks", &prefs.show_bookmarks, PREFS_BOOL, 0 },
-      { "show_clear_url", &prefs.show_clear_url, PREFS_BOOL, 0 },
-      { "show_extra_warnings", &prefs.show_extra_warnings, PREFS_BOOL, 0 },
-      { "show_filemenu", &prefs.show_filemenu, PREFS_BOOL, 0 },
-      { "show_forw", &prefs.show_forw, PREFS_BOOL, 0 },
-      { "show_help", &prefs.show_help, PREFS_BOOL, 0 },
-      { "show_home", &prefs.show_home, PREFS_BOOL, 0 },
-      { "show_msg", &prefs.show_msg, PREFS_BOOL, 0 },
-      { "show_progress_box", &prefs.show_progress_box, PREFS_BOOL, 0 },
-      { "show_quit_dialog", &prefs.show_quit_dialog, PREFS_BOOL, 0 },
-      { "show_reload", &prefs.show_reload, PREFS_BOOL, 0 },
-      { "show_save", &prefs.show_save, PREFS_BOOL, 0 },
-      { "show_url", &prefs.show_url, PREFS_BOOL, 0 },
-      { "show_search", &prefs.show_search, PREFS_BOOL, 0 },
-      { "show_stop", &prefs.show_stop, PREFS_BOOL, 0 },
-      { "show_tools", &prefs.show_tools, PREFS_BOOL, 0 },
-      { "show_tooltip", &prefs.show_tooltip, PREFS_BOOL, 0 },
-      { "show_ui_tooltip", &prefs.show_ui_tooltip, PREFS_BOOL, 0 },
-      { "small_icons", &prefs.small_icons, PREFS_BOOL, 0 },
-      { "start_page", &prefs.start_page, PREFS_URL, 0 },
-      { "theme", &prefs.theme, PREFS_STRING, 0 },
-      { "ui_button_highlight_color", &prefs.ui_button_highlight_color,
-        PREFS_COLOR, 0 },
-      { "ui_fg_color", &prefs.ui_fg_color, PREFS_COLOR, 0 },
-      { "ui_main_bg_color", &prefs.ui_main_bg_color, PREFS_COLOR, 0 },
-      { "ui_selection_color", &prefs.ui_selection_color, PREFS_COLOR, 0 },
-      { "ui_tab_active_bg_color", &prefs.ui_tab_active_bg_color, PREFS_COLOR, 0 },
-      { "ui_tab_bg_color", &prefs.ui_tab_bg_color, PREFS_COLOR, 0 },
-      { "ui_tab_active_fg_color", &prefs.ui_tab_active_fg_color, PREFS_COLOR, 0 },
-      { "ui_tab_fg_color", &prefs.ui_tab_fg_color, PREFS_COLOR, 0 },
-      { "ui_tab_height", &prefs.ui_tab_height, PREFS_INT32, 0 },
-      { "ui_text_bg_color", &prefs.ui_text_bg_color, PREFS_COLOR, 0 },
-      { "penalty_hyphen", &prefs.penalty_hyphen, PREFS_FRACTION_100, 0 },
-      { "penalty_hyphen_2", &prefs.penalty_hyphen_2, PREFS_FRACTION_100, 0 },
-      { "penalty_em_dash_left", &prefs.penalty_em_dash_left,
-        PREFS_FRACTION_100, 0 },
-      { "penalty_em_dash_right", &prefs.penalty_em_dash_right,
-        PREFS_FRACTION_100, 0 },
-      { "penalty_em_dash_right_2", &prefs.penalty_em_dash_right_2,
-        PREFS_FRACTION_100, 0 },
-      { "stretchability_factor", &prefs.stretchability_factor,
-        PREFS_FRACTION_100, 0 },
-      { "link_action", &prefs.link_actions, PREFS_STRINGS, 0 },
-      { "zoom_factor", &prefs.zoom_factor, PREFS_DOUBLE, 0 }
-   };
    // changing the LC_NUMERIC locale (temporarily) to C
    // avoids parsing problems with float numbers
    oldLocale = dStrdup(setlocale(LC_NUMERIC, NULL));
@@ -262,17 +211,128 @@ void PrefsParser::parse(FILE *fp)
 
       if (st == 0) {
          _MSG("prefsparser: name=%s, value=%s\n", name, value);
-         parseOption(name, value, symbols, sizeof(symbols) / sizeof(symbols[0]));
+         parseOption(name, value);
       } else if (st < 0) {
-         MSG_ERR("prefsparser: Syntax error in dillorc line %d:"
-                 " name=\"%s\" value=\"%s\"\n", line_number, name, value);
+         MSG_ERR("prefsparser: Syntax error in dillorc:"
+                 " name=\"%s\" value=\"%s\"\n", name, value);
       }
+
       dFree(line);
-      line_number++;
    }
    fclose(fp);
 
    // restore the old numeric locale
    setlocale(LC_NUMERIC, oldLocale);
    dFree(oldLocale);
+}
+
+/*
+ * Write a name/value pair to the dillorc.
+ */
+void PrefsWriter::writeOption(FILE *fp, const void *n)
+{
+   const SymNode_t *node = (const SymNode_t*)n;
+
+   switch(node->type) {
+   case PREFS_BOOL:
+      fprintf(fp, "%s=%s\n", node->name, *(bool_t*)node->pref ? "YES" : "NO");
+      break;
+   case PREFS_COLOR:
+      fprintf(fp, "%s=0x%x\n", node->name, *(int32_t*)node->pref);
+      break;
+   case PREFS_STRING:
+      {
+         const char *c = *(const char**)node->pref;
+         if (!c)
+            break;
+         /* Kludge to avoid hard-coding a user agent version in the config */
+         if (!strcmp(node->name, "http_user_agent") &&
+             !strncmp(c, "Mozilla/4.0 (compatible; DPlus ", 31)) {
+            fprintf(fp, "#");
+         }
+         fprintf(fp, "%s%s=%s\n", strlen(c) ? "" : "#", node->name, c);
+      }
+      break;
+   case PREFS_STRINGS:
+      {
+         Dlist *d = *(Dlist**)node->pref;
+         if (!d)
+            break;
+         for (int i = 0; i < dList_length(d); i++)
+            fprintf(fp, "%s=%s\n", node->name,
+                    (const char*)dList_nth_data(d, i));
+      }
+      break;
+   case PREFS_URL:
+      {
+         DilloUrl *u = *(DilloUrl**)node->pref;
+         if (!u)
+            break;
+         const char *s = URL_STR(u);
+         fprintf(fp, "%s%s=%s\n", strlen(s) ? "" : "#", node->name, s);
+      }
+      break;
+   case PREFS_INT32:
+      fprintf(fp, "%s=%d\n", node->name, *(int32_t*)node->pref);
+      break;
+   case PREFS_DOUBLE:
+      fprintf(fp, "%s=%f\n", node->name, *(double*)node->pref);
+      break;
+   case PREFS_GEOMETRY:
+      {
+         if (prefs.xpos >= 0 && prefs.ypos >= 0)
+            fprintf(fp, "%s=%dx%d+%d+%d\n", node->name,
+                    prefs.width, prefs.height, prefs.xpos, prefs.ypos);
+         else
+            fprintf(fp, "%s=%dx%d\n", node->name, prefs.width, prefs.height);
+      }
+      break;
+   case PREFS_FILTER:
+      {
+         switch (*(int*)node->pref) {
+         case PREFS_FILTER_SAME_DOMAIN:
+            fprintf(fp, "%s=%s\n", node->name, "same_domain");
+            break;
+         case PREFS_FILTER_ALLOW_ALL:
+            fprintf(fp, "%s=%s\n", node->name, "allow_all");
+            break;
+         }
+      }
+      break;
+   case PREFS_PANEL_SIZE:
+      {
+         switch (*(int*)node->pref) {
+         case P_tiny:
+            fprintf(fp, "%s=%s\n", node->name, "tiny");
+            break;
+         case P_small:
+            fprintf(fp, "%s=%s\n", node->name, "small");
+            break;
+         case P_medium:
+            fprintf(fp, "%s=%s\n", node->name, "medium");
+            break;
+         }
+      }
+      break;
+   }
+}
+
+/*
+ * Write the values in the prefs structure to the dillorc.
+ */
+void PrefsWriter::write(FILE *fp)
+{
+   const SymNode_t *node;
+   uint_t i;
+
+   fprintf(fp, "# Automatically generated by dplus-" VERSION "\n");
+   fprintf(fp, "# Manual changes to this file may be overwritten.\n");
+
+   node = NULL;
+   for (i = 0; i < sizeof(symbols) / sizeof(SymNode_t); i++) {
+      node = &symbols[i];
+      PrefsWriter::writeOption(fp, (const void*)node);
+   }
+
+   fclose(fp);
 }

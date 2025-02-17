@@ -39,7 +39,6 @@ private:
 
    void draw (const core::Rectangle *rect, DrawType type);
    void drawChildWidgets ();
-   int manageTabToFocus();
    inline void clipPoint (int *x, int *y, int border) {
       if (exposeArea) {
          if (*x < exposeArea->x - border)
@@ -74,6 +73,14 @@ public:
    void setCanvasSize (int width, int ascent, int descent);
    void setCursor (core::style::Cursor cursor);
    void setBgColor (core::style::Color *color);
+
+#ifdef ENABLE_PRINTER
+   inline void getCanvasSize (int *w, int *h)
+   {
+      *w = canvasWidth;
+      *h = canvasHeight;
+   }
+#endif /* ENABLE_PRINTER */
 
    void startDrawing (core::Rectangle *area);
    void finishDrawing (core::Rectangle *area);

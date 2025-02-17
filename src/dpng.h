@@ -7,12 +7,10 @@ extern "C" {
 
 #include "url.h"
 #include "image.hh"
-#include "cache.h"
 
 
 void *a_Png_new(DilloImage *Image, DilloUrl *url, int version);
 void a_Png_callback(int Op, CacheClient_t *Client);
-const char *a_Png_version(void);
 
 
 #ifdef __cplusplus

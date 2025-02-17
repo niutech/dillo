@@ -2,7 +2,6 @@
  * File: styleengine.cc
  *
  * Copyright 2008-2009 Johannes Hofmann <Johannes.Hofmann@gmx.de>
- * Copyright 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,75 +12,29 @@
 #include "../dlib/dlib.h"
 #include "msg.h"
 #include "prefs.h"
-#include "misc.h"
 #include "html_common.hh"
 #include "styleengine.hh"
-#include "web.hh"
-#include "capi.h"
 
 using namespace lout::misc;
 using namespace dw::core::style;
 
-/**
- * Signal handler for "delete": This handles the case when an instance
- * of StyleImage is deleted, possibly when the cache client is still
- * active.
- *
- * \todo Not necessary for dw::Image? (dw::Image also implements
- * lout::signal::ObservedObject.)
- */
-class StyleImageDeletionReceiver:
-   public lout::signal::ObservedObject::DeletionReceiver
-{
-   int clientKey;
-
-public:
-   StyleImageDeletionReceiver (int clientKey);
-   ~StyleImageDeletionReceiver ();
-
-   void deleted (lout::signal::ObservedObject *object);
-};
-
-StyleImageDeletionReceiver::StyleImageDeletionReceiver (int clientKey)
-{
-   this->clientKey = clientKey;
-}
-
-StyleImageDeletionReceiver::~StyleImageDeletionReceiver ()
-{
-}
-
-void StyleImageDeletionReceiver::deleted (lout::signal::ObservedObject *object)
-{
-   a_Capi_stop_client (clientKey, 0);
-   delete this;
-}
-
-// ----------------------------------------------------------------------
-
-StyleEngine::StyleEngine (dw::core::Layout *layout,
-                          const DilloUrl *pageUrl, const DilloUrl *baseUrl,
-                          float zoom) {
+StyleEngine::StyleEngine (dw::core::Layout *layout) {
    StyleAttrs style_attrs;
    FontAttrs font_attrs;
 
    doctree = new Doctree ();
    stack = new lout::misc::SimpleVector <Node> (1);
    cssContext = new CssContext ();
-   buildUserStyle ();
    this->layout = layout;
-   this->pageUrl = pageUrl ? a_Url_dup(pageUrl) : NULL;
-   this->baseUrl = baseUrl ? a_Url_dup(baseUrl) : NULL;
    importDepth = 0;
-   dpmm = layout->dpiX () / 25.4; /* assume dpiX == dpiY */
-   this->zoom = zoom;
 
-   stackPush ();
-   Node *n = stack->getLastRef ();
+   stack->increase ();
+   Node *n = stack->getRef (stack->size () - 1);
 
    /* Create a dummy font, attribute, and tag for the bottom of the stack. */
-   font_attrs.name = prefs.font_sans_serif;
-   font_attrs.size = roundInt(14 * prefs.font_factor * zoom);
+   font_attrs.name = prefs.font_default_serif ?
+                     prefs.font_serif : prefs.font_sans_serif;
+   font_attrs.size = roundInt(14 * prefs.font_factor);
    if (font_attrs.size < prefs.font_min_size)
       font_attrs.size = prefs.font_min_size;
    if (font_attrs.size > prefs.font_max_size)
@@ -94,74 +47,64 @@ StyleEngine::StyleEngine (dw::core::Layout *layout,
    style_attrs.initValues ();
    style_attrs.font = Font::create (layout, &font_attrs);
    style_attrs.color = Color::create (layout, 0);
-   style_attrs.backgroundColor = Color::create (layout, prefs.bg_color);
+   style_attrs.backgroundColor = Color::create (layout, 0xffffff);
 
-   n->style = Style::create (&style_attrs);
+   n->style = Style::create (layout, &style_attrs);
+   n->wordStyle = NULL;
+   n->backgroundStyle = NULL;
+   n->styleAttrProperties = NULL;
+   n->styleAttrPropertiesImportant = NULL;
+   n->nonCssProperties = NULL;
+   n->inheritBackgroundColor = false;
 }
 
 StyleEngine::~StyleEngine () {
    while (doctree->top ())
       endElement (doctree->top ()->element);
-
-   stackPop (); // dummy node on the bottom of the stack
-   assert (stack->size () == 0);
-
-   a_Url_free(pageUrl);
-   a_Url_free(baseUrl);
-
-   delete stack;
-   delete doctree;
-   delete cssContext;
-}
-
-void StyleEngine::stackPush () {
-   static const Node emptyNode = {
-      NULL, NULL, NULL, NULL, NULL, NULL, false, false, NULL
-   };
-
-   stack->setSize (stack->size () + 1, emptyNode);
-}
-
-void StyleEngine::stackPop () {
+   assert (stack->size () == 1); // dummy node on the bottom of the stack
    Node *n = stack->getRef (stack->size () - 1);
-
-   delete n->styleAttrProperties;
-   delete n->styleAttrPropertiesImportant;
-   delete n->nonCssProperties;
    if (n->style)
       n->style->unref ();
    if (n->wordStyle)
       n->wordStyle->unref ();
    if (n->backgroundStyle)
       n->backgroundStyle->unref ();
-   stack->setSize (stack->size () - 1);
+   delete stack;
+   delete doctree;
+   delete cssContext;
 }
 
 /**
  * \brief tell the styleEngine that a new html element has started.
  */
-void StyleEngine::startElement (int element, BrowserWindow *bw) {
-   style (bw); // ensure that style of current node is computed
+void StyleEngine::startElement (int element) {
+   if (stack->getRef (stack->size () - 1)->style == NULL)
+      style0 (stack->size () - 1);
 
-   stackPush ();
-   Node *n = stack->getLastRef ();
+   stack->increase ();
+   Node *n = stack->getRef (stack->size () - 1);
+   n->styleAttrProperties = NULL;
+   n->styleAttrPropertiesImportant = NULL;
+   n->nonCssProperties = NULL;
+   n->style = NULL;
+   n->wordStyle = NULL;
+   n->backgroundStyle = NULL;
+   n->inheritBackgroundColor = false;
+
    DoctreeNode *dn = doctree->push ();
-
    dn->element = element;
    n->doctreeNode = dn;
-   if (stack->size () > 1)
-      n->displayNone = stack->getRef (stack->size () - 2)->displayNone;
 }
 
-void StyleEngine::startElement (const char *tagname, BrowserWindow *bw) {
-   startElement (a_Html_tag_index (tagname), bw);
+void StyleEngine::startElement (const char *tagname) {
+   startElement (a_Html_tag_index (tagname));
 }
 
 void StyleEngine::setId (const char *id) {
-   DoctreeNode *dn = doctree->top ();
+   DoctreeNode *dn =  doctree->top ();
    assert (dn->id == NULL);
    dn->id = dStrdup (id);
-}
+};
 
 /**
  * \brief split a string at sep chars and return a SimpleVector of strings
@@ -192,7 +135,7 @@ void StyleEngine::setClass (const char *klass) {
    DoctreeNode *dn = doctree->top ();
    assert (dn->klass == NULL);
    dn->klass = splitStr (klass, ' ');
-}
+};
 
 void StyleEngine::setStyle (const char *styleAttr) {
    Node *n = stack->getRef (stack->size () - 1);
@@ -202,11 +145,11 @@ void StyleEngine::setStyle (const char *styleAttr) {
       n->styleAttrProperties = new CssPropertyList (true);
       n->styleAttrPropertiesImportant = new CssPropertyList (true);
 
-      CssParser::parseDeclarationBlock (baseUrl, styleAttr, strlen (styleAttr),
+      CssParser::parseDeclarationBlock (styleAttr, strlen (styleAttr),
                                         n->styleAttrProperties,
                                         n->styleAttrPropertiesImportant);
    }
-}
+};
 
 /**
  * \brief Instruct StyleEngine to use the nonCssHints from parent element
@@ -215,25 +158,19 @@ void StyleEngine::setStyle (const char *styleAttr) {
  */
 void StyleEngine::inheritNonCssHints () {
    Node *pn = stack->getRef (stack->size () - 2);
+   Node *n = stack->getRef (stack->size () - 1);
 
-   if (pn->nonCssProperties) {
-      Node *n = stack->getRef (stack->size () - 1);
-      CssPropertyList *origNonCssProperties = n->nonCssProperties;
-
-      n->nonCssProperties = new CssPropertyList(*pn->nonCssProperties, true);
-
-      if (origNonCssProperties) // original nonCssProperties have precedence
-         origNonCssProperties->apply (n->nonCssProperties);
-
-      delete origNonCssProperties;
-   }
+   if (pn->nonCssProperties)
+      n->nonCssProperties = new CssPropertyList (*pn->nonCssProperties, true);
 }
 
 void StyleEngine::clearNonCssHints () {
    Node *n = stack->getRef (stack->size () - 1);
 
-   delete n->nonCssProperties;
-   n->nonCssProperties = NULL;
+   if (n->nonCssProperties) {
+      delete n->nonCssProperties;
+      n->nonCssProperties = NULL;
+   }
 }
 
 /**
@@ -252,26 +189,6 @@ dw::core::style::Color *StyleEngine::backgroundColor () {
 
       if (n->style && n->style->backgroundColor)
          return n->style->backgroundColor;
-   }
-
-   return NULL;
-}
-
-dw::core::style::StyleImage *StyleEngine::backgroundImage
-   (dw::core::style::BackgroundRepeat *bgRepeat,
-    dw::core::style::BackgroundAttachment *bgAttachment,
-    dw::core::style::Length *bgPositionX,
-    dw::core::style::Length *bgPositionY) {
-   for (int i = 1; i < stack->size (); i++) {
-      Node *n = stack->getRef (i);
-
-      if (n->style && n->style->backgroundImage) {
-         *bgRepeat = n->style->backgroundRepeat;
-         *bgAttachment = n->style->backgroundAttachment;
-         *bgPositionX = n->style->backgroundPositionX;
-         *bgPositionY = n->style->backgroundPositionY;
-         return n->style->backgroundImage;
-      }
    }
 
    return NULL;
@@ -299,8 +216,23 @@ void StyleEngine::setPseudoVisited () {
 void StyleEngine::endElement (int element) {
    assert (element == doctree->top ()->element);
 
-   stackPop ();
+   Node *n = stack->getRef (stack->size () - 1);
+
+   if (n->styleAttrProperties)
+      delete n->styleAttrProperties;
+   if (n->styleAttrPropertiesImportant)
+      delete n->styleAttrPropertiesImportant;
+   if (n->nonCssProperties)
+      delete n->nonCssProperties;
+   if (n->style)
+      n->style->unref ();
+   if (n->wordStyle)
+      n->wordStyle->unref ();
+   if (n->backgroundStyle)
+      n->backgroundStyle->unref ();
+
    doctree->pop ();
+   stack->setSize (stack->size () - 1);
 }
 
 void StyleEngine::preprocessAttrs (dw::core::style::StyleAttrs *attrs) {
@@ -308,16 +240,6 @@ void StyleEngine::preprocessAttrs (dw::core::style::StyleAttrs *attrs) {
    if (stack->getRef (stack->size () - 2)->inheritBackgroundColor) {
       attrs->backgroundColor =
          stack->getRef (stack->size () - 2)->style->backgroundColor;
-      attrs->backgroundImage =
-         stack->getRef (stack->size () - 2)->style->backgroundImage;
-      attrs->backgroundRepeat =
-         stack->getRef (stack->size () - 2)->style->backgroundRepeat;
-      attrs->backgroundAttachment =
-         stack->getRef (stack->size () - 2)->style->backgroundAttachment;
-      attrs->backgroundPositionX =
-         stack->getRef (stack->size () - 2)->style->backgroundPositionX;
-      attrs->backgroundPositionY =
-         stack->getRef (stack->size () - 2)->style->backgroundPositionY;
 
       attrs->valign = stack->getRef (stack->size () - 2)->style->valign;
    }
@@ -361,17 +283,15 @@ void StyleEngine::postprocessAttrs (dw::core::style::StyleAttrs *attrs) {
 /**
  * \brief Make changes to StyleAttrs attrs according to CssPropertyList props.
  */
-void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
-                         BrowserWindow *bw) {
+void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props) {
    FontAttrs fontAttrs = *attrs->font;
    Font *parentFont = stack->get (i - 1).style->font;
    char *c, *fontName;
    int lineHeight;
-   DilloUrl *imgUrl = NULL;
 
    /* Determine font first so it can be used to resolve relative lengths. */
-   for (int j = 0; j < props->size (); j++) {
-      CssProperty *p = props->getRef (j);
+   for (int i = 0; i < props->size (); i++) {
+      CssProperty *p = props->getRef (i);
 
       switch (p->name) {
          case CSS_PROPERTY_FONT_FAMILY:
@@ -384,15 +304,15 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
                   *c = '\0';
                dStrstrip(p->value.strVal);
 
-               if (dStrAsciiCasecmp (p->value.strVal, "serif") == 0)
+               if (strcmp (p->value.strVal, "serif") == 0)
                   fontName = prefs.font_serif;
-               else if (dStrAsciiCasecmp (p->value.strVal, "sans-serif") == 0)
+               else if (strcmp (p->value.strVal, "sans-serif") == 0)
                   fontName = prefs.font_sans_serif;
-               else if (dStrAsciiCasecmp (p->value.strVal, "cursive") == 0)
+               else if (strcmp (p->value.strVal, "cursive") == 0)
                   fontName = prefs.font_cursive;
-               else if (dStrAsciiCasecmp (p->value.strVal, "fantasy") == 0)
+               else if (strcmp (p->value.strVal, "fantasy") == 0)
                   fontName = prefs.font_fantasy;
-               else if (dStrAsciiCasecmp (p->value.strVal, "monospace") == 0)
+               else if (strcmp (p->value.strVal, "monospace") == 0)
                   fontName = prefs.font_monospace;
                else if (Font::exists(layout, p->value.strVal))
                   fontName = p->value.strVal;
@@ -412,37 +332,36 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
             if (p->type == CSS_TYPE_ENUM) {
                switch (p->value.intVal) {
                   case CSS_FONT_SIZE_XX_SMALL:
-                     fontAttrs.size = roundInt(8.1 * prefs.font_factor * zoom);
+                     fontAttrs.size = roundInt(11.0 * prefs.font_factor);
                      break;
                   case CSS_FONT_SIZE_X_SMALL:
-                     fontAttrs.size = roundInt(9.7 * prefs.font_factor * zoom);
+                     fontAttrs.size = roundInt(12.0 * prefs.font_factor);
                      break;
                   case CSS_FONT_SIZE_SMALL:
-                     fontAttrs.size = roundInt(11.7 * prefs.font_factor * zoom);
+                     fontAttrs.size = roundInt(13.0 * prefs.font_factor);
                      break;
                   case CSS_FONT_SIZE_MEDIUM:
-                     fontAttrs.size = roundInt(14.0 * prefs.font_factor * zoom);
+                     fontAttrs.size = roundInt(14.0 * prefs.font_factor);
                      break;
                   case CSS_FONT_SIZE_LARGE:
-                     fontAttrs.size = roundInt(16.8 * prefs.font_factor * zoom);
                      break;
                   case CSS_FONT_SIZE_X_LARGE:
-                     fontAttrs.size = roundInt(20.2 * prefs.font_factor * zoom);
+                     fontAttrs.size = roundInt(16.0 * prefs.font_factor);
                      break;
                   case CSS_FONT_SIZE_XX_LARGE:
-                     fontAttrs.size = roundInt(24.2 * prefs.font_factor * zoom);
+                     fontAttrs.size = roundInt(17.0 * prefs.font_factor);
                      break;
                   case CSS_FONT_SIZE_SMALLER:
-                     fontAttrs.size = roundInt(fontAttrs.size * 0.83 * zoom);
+                     fontAttrs.size -= roundInt(1.0 * prefs.font_factor);
                      break;
                   case CSS_FONT_SIZE_LARGER:
-                     fontAttrs.size = roundInt(fontAttrs.size * 1.2 * zoom);
+                     fontAttrs.size += roundInt(1.0 * prefs.font_factor);
                      break;
                   default:
                      assert(false); // invalid font-size enum
                }
             } else {
-               computeValue (&fontAttrs.size, p->value.lenVal, parentFont,
+               computeValue (&fontAttrs.size, p->value.intVal, parentFont,
                   parentFont->size);
             }
 
@@ -494,7 +413,7 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
                   fontAttrs.letterSpacing = 0;
                }
             } else {
-               computeValue (&fontAttrs.letterSpacing, p->value.lenVal,
+               computeValue (&fontAttrs.letterSpacing, p->value.intVal,
                   parentFont, parentFont->size);
             }
 
@@ -516,34 +435,17 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
 
    attrs->font = Font::create (layout, &fontAttrs);
 
-   for (int j = 0; j < props->size (); j++) {
-      CssProperty *p = props->getRef (j);
+   for (int i = 0; i < props->size (); i++) {
+      CssProperty *p = props->getRef (i);
 
       switch (p->name) {
          /* \todo missing cases */
-         case CSS_PROPERTY_BACKGROUND_ATTACHMENT:
-            attrs->backgroundAttachment =
-               (BackgroundAttachment) p->value.intVal;
-            break;
          case CSS_PROPERTY_BACKGROUND_COLOR:
             if (prefs.allow_white_bg || p->value.intVal != 0xffffff)
                attrs->backgroundColor = Color::create(layout, p->value.intVal);
             else
-               attrs->backgroundColor =
-                  Color::create(layout, prefs.white_bg_replacement);
-            break;
-         case CSS_PROPERTY_BACKGROUND_IMAGE:
-            // p->value.strVal should be absolute, so baseUrl is not needed
-            imgUrl = a_Url_new (p->value.strVal, NULL);
-            break;
-         case CSS_PROPERTY_BACKGROUND_POSITION:
-            computeLength (&attrs->backgroundPositionX, p->value.posVal->posX,
-                           attrs->font);
-            computeLength (&attrs->backgroundPositionY, p->value.posVal->posY,
-                           attrs->font);
-            break;
-         case CSS_PROPERTY_BACKGROUND_REPEAT:
-            attrs->backgroundRepeat = (BackgroundRepeat) p->value.intVal;
+               //attrs->backgroundColor = Color::create(layout, 0xdcd1ba);
+               attrs->backgroundColor = Color::create(layout, 0xe0e0a3);
             break;
          case CSS_PROPERTY_BORDER_COLLAPSE:
             attrs->borderCollapse = (BorderCollapse) p->value.intVal;
@@ -589,14 +491,8 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
             computeBorderWidth (&attrs->borderWidth.top, p, attrs->font);
             break;
          case CSS_PROPERTY_BORDER_SPACING:
-            computeValue (&attrs->hBorderSpacing, p->value.lenVal,attrs->font);
-            computeValue (&attrs->vBorderSpacing, p->value.lenVal,attrs->font);
-            break;
-         case CSS_PROPERTY_BOTTOM:
-            computeLength (&attrs->bottom, p->value.lenVal, attrs->font);
-            break;
-         case CSS_PROPERTY_CLEAR:
-            attrs->clear = (ClearType) p->value.intVal;
+            computeValue (&attrs->hBorderSpacing, p->value.intVal,attrs->font);
+            computeValue (&attrs->vBorderSpacing, p->value.intVal,attrs->font);
             break;
          case CSS_PROPERTY_COLOR:
             attrs->color = Color::create (layout, p->value.intVal);
@@ -606,23 +502,15 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
             break;
          case CSS_PROPERTY_DISPLAY:
             attrs->display = (DisplayType) p->value.intVal;
-            if (attrs->display == DISPLAY_NONE)
-               stack->getRef (i)->displayNone = true;
-            break;
-         case CSS_PROPERTY_FLOAT:
-            attrs->vloat = (FloatType) p->value.intVal;
-            break;
-         case CSS_PROPERTY_LEFT:
-            computeLength (&attrs->left, p->value.lenVal, attrs->font);
             break;
          case CSS_PROPERTY_LINE_HEIGHT:
             if (p->type == CSS_TYPE_ENUM) { //only valid enum value is "normal"
                attrs->lineHeight = dw::core::style::LENGTH_AUTO;
             } else if (p->type == CSS_TYPE_LENGTH_PERCENTAGE_NUMBER) {
-               if (CSS_LENGTH_TYPE (p->value.lenVal) == CSS_LENGTH_TYPE_NONE) {
+               if (CSS_LENGTH_TYPE (p->value.intVal) == CSS_LENGTH_TYPE_NONE) {
                   attrs->lineHeight =
-                     createPerLength(CSS_LENGTH_VALUE(p->value.lenVal));
-               } else if (computeValue (&lineHeight, p->value.lenVal,
+                     createPerLength(CSS_LENGTH_VALUE(p->value.intVal));
+               } else if (computeValue (&lineHeight, p->value.intVal,
                                         attrs->font, attrs->font->size)) {
                   attrs->lineHeight = createAbsLength(lineHeight);
                }
@@ -635,45 +523,36 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
             attrs->listStyleType = (ListStyleType) p->value.intVal;
             break;
          case CSS_PROPERTY_MARGIN_BOTTOM:
-            computeValue (&attrs->margin.bottom, p->value.lenVal, attrs->font);
+            computeValue (&attrs->margin.bottom, p->value.intVal, attrs->font);
             if (attrs->margin.bottom < 0) // \todo fix negative margins in dw/*
                attrs->margin.bottom = 0;
             break;
          case CSS_PROPERTY_MARGIN_LEFT:
-            computeValue (&attrs->margin.left, p->value.lenVal, attrs->font);
+            computeValue (&attrs->margin.left, p->value.intVal, attrs->font);
             if (attrs->margin.left < 0) // \todo fix negative margins in dw/*
                attrs->margin.left = 0;
             break;
          case CSS_PROPERTY_MARGIN_RIGHT:
-            computeValue (&attrs->margin.right, p->value.lenVal, attrs->font);
+            computeValue (&attrs->margin.right, p->value.intVal, attrs->font);
             if (attrs->margin.right < 0) // \todo fix negative margins in dw/*
                attrs->margin.right = 0;
             break;
          case CSS_PROPERTY_MARGIN_TOP:
-            computeValue (&attrs->margin.top, p->value.lenVal, attrs->font);
+            computeValue (&attrs->margin.top, p->value.intVal, attrs->font);
             if (attrs->margin.top < 0) // \todo fix negative margins in dw/*
                attrs->margin.top = 0;
             break;
-         case CSS_PROPERTY_OVERFLOW:
-            attrs->overflow = (Overflow) p->value.intVal;
-            break;
          case CSS_PROPERTY_PADDING_TOP:
-            computeValue (&attrs->padding.top, p->value.lenVal, attrs->font);
+            computeValue (&attrs->padding.top, p->value.intVal, attrs->font);
             break;
          case CSS_PROPERTY_PADDING_BOTTOM:
-            computeValue (&attrs->padding.bottom, p->value.lenVal,attrs->font);
+            computeValue (&attrs->padding.bottom, p->value.intVal,attrs->font);
             break;
          case CSS_PROPERTY_PADDING_LEFT:
-            computeValue (&attrs->padding.left, p->value.lenVal, attrs->font);
+            computeValue (&attrs->padding.left, p->value.intVal, attrs->font);
             break;
          case CSS_PROPERTY_PADDING_RIGHT:
-            computeValue (&attrs->padding.right, p->value.lenVal, attrs->font);
-            break;
-         case CSS_PROPERTY_POSITION:
-            attrs->position = (Position) p->value.intVal;
-            break;
-         case CSS_PROPERTY_RIGHT:
-            computeLength (&attrs->right, p->value.lenVal, attrs->font);
+            computeValue (&attrs->padding.right, p->value.intVal, attrs->font);
             break;
          case CSS_PROPERTY_TEXT_ALIGN:
             attrs->textAlign = (TextAlignType) p->value.intVal;
@@ -682,13 +561,7 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
             attrs->textDecoration |= p->value.intVal;
             break;
          case CSS_PROPERTY_TEXT_INDENT:
-            computeLength (&attrs->textIndent, p->value.lenVal, attrs->font);
-            break;
-         case CSS_PROPERTY_TEXT_TRANSFORM:
-            attrs->textTransform = (TextTransform) p->value.intVal;
-            break;
-         case CSS_PROPERTY_TOP:
-            computeLength (&attrs->top, p->value.lenVal, attrs->font);
+            computeLength (&attrs->textIndent, p->value.intVal, attrs->font);
             break;
          case CSS_PROPERTY_VERTICAL_ALIGN:
             attrs->valign = (VAlignType) p->value.intVal;
@@ -697,10 +570,10 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
             attrs->whiteSpace = (WhiteSpace) p->value.intVal;
             break;
          case CSS_PROPERTY_WIDTH:
-            computeLength (&attrs->width, p->value.lenVal, attrs->font);
+            computeLength (&attrs->width, p->value.intVal, attrs->font);
             break;
          case CSS_PROPERTY_HEIGHT:
-            computeLength (&attrs->height, p->value.lenVal, attrs->font);
+            computeLength (&attrs->height, p->value.intVal, attrs->font);
             break;
          case CSS_PROPERTY_WORD_SPACING:
             if (p->type == CSS_TYPE_ENUM) {
@@ -708,7 +581,7 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
                   attrs->wordSpacing = 0;
                }
             } else {
-               computeValue(&attrs->wordSpacing, p->value.lenVal, attrs->font);
+               computeValue(&attrs->wordSpacing, p->value.intVal, attrs->font);
             }
 
             /* Limit to reasonable values to avoid overflows */
@@ -717,33 +590,8 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
             else if (attrs->wordSpacing < -1000)
                attrs->wordSpacing = -1000;
             break;
-         case CSS_PROPERTY_MIN_WIDTH:
-            computeLength (&attrs->minWidth, p->value.lenVal, attrs->font);
-            break;
-         case CSS_PROPERTY_MAX_WIDTH:
-            computeLength (&attrs->maxWidth, p->value.lenVal, attrs->font);
-            break;
-         case CSS_PROPERTY_MIN_HEIGHT:
-            computeLength (&attrs->minHeight, p->value.lenVal, attrs->font);
-            break;
-         case CSS_PROPERTY_MAX_HEIGHT:
-            computeLength (&attrs->maxHeight, p->value.lenVal, attrs->font);
-            break;
-         case CSS_PROPERTY_Z_INDEX:
-            if (p->type == CSS_LENGTH_TYPE_AUTO)
-               attrs->zIndex = dw::core::style::Z_INDEX_AUTO;
-            else
-               attrs->zIndex = p->value.intVal;
-            break;
          case PROPERTY_X_LINK:
             attrs->x_link = p->value.intVal;
-            break;
-         case PROPERTY_X_LANG:
-            attrs->x_lang[0] = D_ASCII_TOLOWER(p->value.strVal[0]);
-            if (attrs->x_lang[0])
-               attrs->x_lang[1] = D_ASCII_TOLOWER(p->value.strVal[1]);
-            else
-               attrs->x_lang[1] = 0;
             break;
          case PROPERTY_X_IMG:
             attrs->x_img = p->value.intVal;
@@ -756,79 +604,29 @@ void StyleEngine::apply (int i, StyleAttrs *attrs, CssPropertyList *props,
       }
    }
 
-   if (imgUrl && prefs.load_background_images &&
-       !stack->getRef (i)->displayNone &&
-       !(URL_FLAGS(pageUrl) & URL_SpamSafe))
-   {
-      attrs->backgroundImage = StyleImage::create();
-      DilloImage *image =
-         a_Image_new(layout,
-            (void*)attrs->backgroundImage
-            ->getMainImgRenderer(),
-            0xffffff, 0x000000);
-
-      // we use the pageUrl as requester to prevent cross
-      // domain requests as specified in domainrc
-      DilloWeb *web = a_Web_new(bw, imgUrl, pageUrl);
-      web->Image = image;
-      a_Image_ref(image);
-      web->flags |= WEB_Image;
-
-      int clientKey;
-      if ((clientKey = a_Capi_open_url(web, NULL, NULL)) != 0) {
-                  a_Bw_add_client(bw, clientKey, 0);
-                  a_Bw_add_url(bw, imgUrl);
-                  attrs->backgroundImage->connectDeletion
-                     (new StyleImageDeletionReceiver (clientKey));
-      }
-   }
-   a_Url_free (imgUrl);
 }
 
 /**
  * \brief Resolve relative lengths to absolute values.
  */
 bool StyleEngine::computeValue (int *dest, CssLength value, Font *font) {
+   static float dpmm;
+
+   if (dpmm == 0.0)
+      dpmm = layout->dpiX () / 25.4; /* assume dpiX == dpiY */
+
    switch (CSS_LENGTH_TYPE (value)) {
       case CSS_LENGTH_TYPE_PX:
-         *dest = roundInt (CSS_LENGTH_VALUE (value) * zoom);
+         *dest = (int) CSS_LENGTH_VALUE (value);
          return true;
       case CSS_LENGTH_TYPE_MM:
-         *dest = roundInt (CSS_LENGTH_VALUE (value) * dpmm * zoom);
+         *dest = roundInt (CSS_LENGTH_VALUE (value) * dpmm);
          return true;
       case CSS_LENGTH_TYPE_EM:
-         /* Doesn't need zoom as it is already applied to font->size */
          *dest = roundInt (CSS_LENGTH_VALUE (value) * font->size);
          return true;
       case CSS_LENGTH_TYPE_EX:
-         /* Doesn't need zoom as it is already applied to font->xHeight */
          *dest = roundInt (CSS_LENGTH_VALUE(value) * font->xHeight);
-         return true;
-      case CSS_LENGTH_TYPE_CH:
-         *dest = roundInt (CSS_LENGTH_VALUE(value) * font->zeroWidth);
-         return true;
-      case CSS_LENGTH_TYPE_REM:
-         if (stack->size() < 2) {
-            *dest = 0;
-         } else {
-            dw::core::style::Style *root_style = stack->getRef (1)->style;
-            if (root_style)
-               *dest = roundInt (CSS_LENGTH_VALUE(value) * root_style->font->size);
-            else
-               *dest = 0;
-         }
-         return true;
-      case CSS_LENGTH_TYPE_VW:
-         *dest = roundInt (CSS_LENGTH_VALUE(value) * layout->getWidthViewport() / 100);
-         return true;
-      case CSS_LENGTH_TYPE_VH:
-         *dest = roundInt (CSS_LENGTH_VALUE(value) * layout->getHeightViewport() / 100);
-         return true;
-      case CSS_LENGTH_TYPE_VMIN:
-         *dest = roundInt (CSS_LENGTH_VALUE(value) * MIN(layout->getWidthViewport(), layout->getHeightViewport()) / 100);
-         return true;
-      case CSS_LENGTH_TYPE_VMAX:
-         *dest = roundInt (CSS_LENGTH_VALUE(value) * MAX(layout->getWidthViewport(), layout->getHeightViewport()) / 100);
          return true;
       case CSS_LENGTH_TYPE_NONE:
          // length values other than 0 without unit are only allowed
@@ -888,7 +686,7 @@ void StyleEngine::computeBorderWidth (int *dest, CssProperty *p,
             assert(false);
       }
    } else {
-      computeValue (dest, p->value.lenVal, font);
+      computeValue (dest, p->value.intVal, font);
    }
 }
 
@@ -897,16 +695,16 @@ void StyleEngine::computeBorderWidth (int *dest, CssProperty *p,
  * A normal style might have backgroundColor == NULL to indicate a transparent
  * background. This method ensures that backgroundColor is set.
  */
-Style * StyleEngine::backgroundStyle (BrowserWindow *bw) {
+Style * StyleEngine::backgroundStyle () {
    if (!stack->getRef (stack->size () - 1)->backgroundStyle) {
-      StyleAttrs attrs = *style (bw);
+      StyleAttrs attrs = *style ();
 
       for (int i = stack->size () - 1; i >= 0 && ! attrs.backgroundColor; i--)
          attrs.backgroundColor = stack->getRef (i)->style->backgroundColor;
 
       assert (attrs.backgroundColor);
       stack->getRef (stack->size () - 1)->backgroundStyle =
-         Style::create (&attrs);
+         Style::create (layout, &attrs);
    }
    return stack->getRef (stack->size () - 1)->backgroundStyle;
 }
@@ -916,7 +714,7 @@ Style * StyleEngine::backgroundStyle (BrowserWindow *bw) {
  * HTML elements and the nonCssProperties that have been set.
  * This method is private. Call style() to get a current style object.
  */
-Style * StyleEngine::style0 (int i, BrowserWindow *bw) {
+Style * StyleEngine::style0 (int i) {
    CssPropertyList props, *styleAttrProperties, *styleAttrPropertiesImportant;
    CssPropertyList *nonCssProperties;
    // get previous style from the stack
@@ -944,31 +742,25 @@ Style * StyleEngine::style0 (int i, BrowserWindow *bw) {
                       nonCssProperties);
 
    // apply style
-   apply (i, &attrs, &props, bw);
+   apply (i, &attrs, &props);
 
    postprocessAttrs (&attrs);
 
-   stack->getRef (i)->style = Style::create (&attrs);
+   stack->getRef (i)->style = Style::create (layout, &attrs);
 
    return stack->getRef (i)->style;
 }
 
-Style * StyleEngine::wordStyle0 (BrowserWindow *bw) {
-   StyleAttrs attrs = *style (bw);
+Style * StyleEngine::wordStyle0 () {
+   StyleAttrs attrs = *style ();
    attrs.resetValues ();
 
-   if (stack->getRef (stack->size() - 1)->inheritBackgroundColor) {
-      attrs.backgroundColor = style (bw)->backgroundColor;
-      attrs.backgroundImage = style (bw)->backgroundImage;
-      attrs.backgroundRepeat = style (bw)->backgroundRepeat;
-      attrs.backgroundAttachment = style (bw)->backgroundAttachment;
-      attrs.backgroundPositionX = style (bw)->backgroundPositionX;
-      attrs.backgroundPositionY = style (bw)->backgroundPositionY;
-   }
+   if (stack->getRef (stack->size() - 1)->inheritBackgroundColor)
+      attrs.backgroundColor = style ()->backgroundColor;
 
-   attrs.valign = style (bw)->valign;
+   attrs.valign = style ()->valign;
 
-   stack->getRef(stack->size() - 1)->wordStyle = Style::create(&attrs);
+   stack->getRef(stack->size() - 1)->wordStyle = Style::create(layout, &attrs);
    return stack->getRef (stack->size () - 1)->wordStyle;
 }
 
@@ -979,7 +771,7 @@ Style * StyleEngine::wordStyle0 (BrowserWindow *bw) {
  * and thereby after the HTML-element has been opened.
  * Note that restyle() does not change any styles in the widget tree.
  */
-void StyleEngine::restyle (BrowserWindow *bw) {
+void StyleEngine::restyle () {
    for (int i = 1; i < stack->size (); i++) {
       Node *n = stack->getRef (i);
       if (n->style) {
@@ -995,7 +787,7 @@ void StyleEngine::restyle (BrowserWindow *bw) {
          n->backgroundStyle = NULL;
       }
 
-      style0 (i, bw);
+      style0 (i);
    }
 }
 
@@ -1009,82 +801,4 @@ void StyleEngine::parse (DilloHtml *html, DilloUrl *url, const char *buf,
    importDepth++;
    CssParser::parse (html, url, cssContext, buf, buflen, origin);
    importDepth--;
-}
-
-/**
- * \brief Create the user agent style.
- *
- * The user agent style defines how dillo renders HTML in the absence of
- * author or user styles.
- */
-void StyleEngine::init () {
-   const char *cssBuf =
-      "body  {margin: 5px}"
-      "big {font-size: 1.17em}"
-      "blockquote, dd {margin-left: 40px; margin-right: 40px}"
-      "center {text-align: center}"
-      "dt {font-weight: bolder}"
-      ":link {color: blue; text-decoration: underline; cursor: pointer}"
-      ":visited {color: #800080; text-decoration: underline; cursor: pointer}"
-      "h1, h2, h3, h4, h5, h6, b, strong {font-weight: bolder}"
-      "address, article, aside, center, div, figure, figcaption, footer,"
-      " h1, h2, h3, h4, h5, h6, header, main, nav, ol, p, pre, section, ul"
-      " {display: block}"
-      "i, em, cite, address, var {font-style: italic}"
-      "frameset, ul, ol, dir {margin-left: 40px}"
-      /* WORKAROUND: It should be margin: 1em 0
-       * but as we don't collapse these margins yet, it
-       * look better like this.
-       */
-      "p {margin: 0.5em 0}"
-      "figure {margin: 1em 40px}"
-      "h1 {font-size: 2em; margin-top: .67em; margin-bottom: 0}"
-      "h2 {font-size: 1.5em; margin-top: .75em; margin-bottom: 0}"
-      "h3 {font-size: 1.17em; margin-top: .83em; margin-bottom: 0}"
-      "h4 {margin-top: 1.12em; margin-bottom: 0}"
-      "h5 {font-size: 0.83em; margin-top: 1.5em; margin-bottom: 0}"
-      "h6 {font-size: 0.75em; margin-top: 1.67em; margin-bottom: 0}"
-      "hr {width: 100%; border: 1px inset}"
-      "li {margin-top: 0.1em; display: list-item}"
-      "pre {white-space: pre}"
-      "ol {list-style-type: decimal}"
-      "ul {list-style-type: disc}"
-      "ul ul {list-style-type: circle}"
-      "ul ul ul {list-style-type: square}"
-      "ul ul ul ul {list-style-type: disc}"
-      "ins, u {text-decoration: underline}"
-      "small, sub, sup {font-size: 0.83em}"
-      "sub {vertical-align: sub}"
-      "sup {vertical-align: super}"
-      "s, strike, del {text-decoration: line-through}"
-      /* HTML5 spec notes that mark styling "is just a suggestion and can be
-       * changed based on implementation feedback"
-       */
-      "mark {background: yellow; color: black;}"
-      "table {border-spacing: 2px}"
-      "td, th {padding: 2px}"
-      "thead, tbody, tfoot {vertical-align: middle}"
-      "th {font-weight: bolder; text-align: center}"
-      "code, tt, pre, samp, kbd {font-family: monospace}"
-      /* WORKAROUND: Reset font properties in tables as some
-       * pages rely on it (e.g. gmail).
-       * http://developer.mozilla.org/en-US/Fixing_Table_Inheritance_in_Quirks_Mode
-       * has a detailed description of the issue.
-       */
-      "table, caption {font-size: medium; font-weight: normal}";
-
-   CssContext context;
-   CssParser::parse (NULL, NULL, &context, cssBuf, strlen (cssBuf),
-                     CSS_ORIGIN_USER_AGENT);
-}
-
-void StyleEngine::buildUserStyle () {
-   Dstr *style;
-   char *filename = dStrconcat(dGethomedir(), "/.dillo/style.css", NULL);
-
-   if ((style = a_Misc_file2dstr(filename))) {
-      CssParser::parse (NULL,NULL,cssContext,style->str, style->len,CSS_ORIGIN_USER);
-      dStr_free (style, 1);
-   }
-   dFree (filename);
 }

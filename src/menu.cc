@@ -2,7 +2,6 @@
  * File: menu.cc
  *
  * Copyright (C) 2005-2007 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -10,36 +9,23 @@
  * (at your option) any later version.
  */
 
-/**
- * @file
- * Functions for menus
- */
+// Functions/Methods for menus
+
+// Note: The Bookmarks menu is generated in bookmark.cc.
 
 #include <FL/Fl.H>
 #include <FL/Fl_Menu_Item.H>
 
-#include <unistd.h>
-#include <errno.h>
-#include "lout/misc.hh"    /* SimpleVector */
+#include "../lout/misc.hh"    /* SimpleVector */
 #include "msg.h"
 #include "menu.hh"
-#include "actions.h"
 #include "uicmd.hh"
 #include "history.h"
 #include "html.hh"
 #include "ui.hh" // for (UI *)
 #include "keys.hh"
 #include "timeout.hh"
-
-/*
- * Local data types
- */
-
-typedef struct {
-   const char *title;
-   const Fl_Menu_Item *picked;
-   const Fl_Menu_Item *menu;
-} Menu_popup_data_t;
+#include "misc.h" // for a_Misc_parse_search_url()
 
 /*
  * Local data
@@ -64,7 +50,7 @@ static void Menu_nop_cb(Fl_Widget*, void*)
 {
 }
 
-/**
+/*
  * Static function for File menu callbacks.
  */
 static void filemenu_cb(Fl_Widget*, void *data)
@@ -75,8 +61,12 @@ static void filemenu_cb(Fl_Widget*, void *data)
       a_UIcmd_open_url_nt(popup_bw, NULL, 1);
    } else if (strcmp((char*)data, "of") == 0) {
       a_UIcmd_open_file(popup_bw);
-   } else if (strcmp((char*)data, "ou") == 0) {
-      a_UIcmd_focus_location(popup_bw);
+   } else if (strcmp((char*)data, "sa") == 0) {
+      a_UIcmd_save(popup_bw);
+#ifdef ENABLE_PRINTER
+   } else if (strcmp((char*)data, "pr") == 0) {
+      a_UIcmd_print_page(popup_bw);
+#endif /* ENABLE_PRINTER */
    } else if (strcmp((char*)data, "cw") == 0) {
       a_Timeout_add(0.0, a_UIcmd_close_bw, popup_bw);
    } else if (strcmp((char*)data, "ed") == 0) {
@@ -84,56 +74,83 @@ static void filemenu_cb(Fl_Widget*, void *data)
    }
 }
 
-
-static void Menu_copy_urlstr_cb(Fl_Widget*, void *user_data)
+/*
+ * Static function for Search menu callbacks.
+ */
+static void searchmenu_cb(Fl_Widget*, void *data)
 {
-   if (user_data) {
-      DilloUrl *url = (DilloUrl *)user_data ;
-      a_UIcmd_copy_urlstr(popup_bw, URL_STR(url));
-   }
+   prefs.search_url_idx = *((int *)&data);
 }
 
-/**
+
+static void Menu_copy_urlstr_cb(Fl_Widget*, void*)
+{
+   if (popup_url)
+      a_UIcmd_copy_urlstr(popup_bw, URL_STR(popup_url));
+}
+
+static void Menu_link_cb(Fl_Widget*, void *user_data)
+{
+   DilloUrl *url = (DilloUrl *) user_data ;
+   _MSG("Menu_link_cb: click! :-)\n");
+
+   if (url)
+      a_Menu_link_popup(popup_bw, url);
+}
+
+/*
  * Open URL
  */
-static void Menu_open_url_cb(Fl_Widget*, void *user_data)
+static void Menu_open_url_cb(Fl_Widget*, void*)
 {
-   DilloUrl *url = (DilloUrl *)user_data;
    _MSG("Open URL cb: click! :-)\n");
-   a_UIcmd_open_url(popup_bw, url);
+   a_UIcmd_open_url(popup_bw, popup_url);
 }
 
-/**
+/*
  * Open URL in new window
  */
-static void Menu_open_url_nw_cb(Fl_Widget*, void *user_data)
+static void Menu_open_url_nw_cb(Fl_Widget*, void*)
 {
-   DilloUrl *url = (DilloUrl *)user_data;
    _MSG("Open URL in new window cb: click! :-)\n");
-   a_UIcmd_open_url_nw(popup_bw, url);
+   a_UIcmd_open_url_nw(popup_bw, popup_url);
 }
 
-/**
+/*
  * Open URL in new Tab
  */
-static void Menu_open_url_nt_cb(Fl_Widget*, void *user_data)
+static void Menu_open_url_nt_cb(Fl_Widget*, void*)
 {
-   DilloUrl *url = (DilloUrl *)user_data;
    int focus = prefs.focus_new_tab ? 1 : 0;
    if (Fl::event_state(FL_SHIFT)) focus = !focus;
-   a_UIcmd_open_url_nt(popup_bw, url, focus);
+   a_UIcmd_open_url_nt(popup_bw, popup_url, focus);
 }
 
-/**
+/*
  * Add bookmark
  */
-static void Menu_add_bookmark_cb(Fl_Widget*, void *user_data)
+static void Menu_add_bookmark_cb(Fl_Widget*, void*)
 {
-   DilloUrl *url = (DilloUrl *)user_data;
-   a_UIcmd_add_bookmark(popup_bw, url);
+   a_UIcmd_add_bookmark(popup_bw, popup_url);
 }
 
-/**
+/*
+ * Copy current location
+ */
+static void Menu_copy_location_cb(Fl_Widget*, void*)
+{
+   a_UIcmd_copy_location(popup_bw);
+}
+
+/*
+ * Copy selected text
+ */
+static void Menu_copy_selection_cb(Fl_Widget*, void*)
+{
+   a_UIcmd_copy(popup_bw);
+}
+
+/*
  * Find text
  */
 static void Menu_find_text_cb(Fl_Widget*, void*)
@@ -141,16 +158,15 @@ static void Menu_find_text_cb(Fl_Widget*, void*)
    ((UI *)popup_bw->ui)->findbar_toggle(1);
 }
 
-/**
+/*
  * Save link
  */
-static void Menu_save_link_cb(Fl_Widget*, void *user_data)
+static void Menu_save_link_cb(Fl_Widget*, void*)
 {
-   DilloUrl *url = (DilloUrl *)user_data;
-   a_UIcmd_save_link(popup_bw, url);
+   a_UIcmd_save_link(popup_bw, popup_url);
 }
 
-/**
+/*
  * Save current page
  */
 static void Menu_save_page_cb(Fl_Widget*, void*)
@@ -158,16 +174,25 @@ static void Menu_save_page_cb(Fl_Widget*, void*)
    a_UIcmd_save(popup_bw);
 }
 
-/**
- * View current page source
+/*
+ * Print current page
  */
-static void Menu_view_page_source_cb(Fl_Widget*, void *user_data)
+static void Menu_print_page_cb(Fl_Widget*, void*)
 {
-   DilloUrl *url = (DilloUrl *)user_data;
-   a_UIcmd_view_page_source(popup_bw, url);
+#ifdef ENABLE_PRINTER
+   a_UIcmd_print_page(popup_bw);
+#endif /* ENABLE_PRINTER */
 }
 
-/**
+/*
+ * View current page source
+ */
+static void Menu_view_page_source_cb(Fl_Widget*, void*)
+{
+   a_UIcmd_view_page_source(popup_bw, popup_url);
+}
+
+/*
  * View current page's bugs
  */
 static void Menu_view_page_bugs_cb(Fl_Widget*, void*)
@@ -175,7 +200,7 @@ static void Menu_view_page_bugs_cb(Fl_Widget*, void*)
    a_UIcmd_view_page_bugs(popup_bw);
 }
 
-/**
+/*
  * Load images on current page that match URL pattern
  */
 static void Menu_load_images_cb(Fl_Widget*, void *user_data)
@@ -187,7 +212,7 @@ static void Menu_load_images_cb(Fl_Widget*, void *user_data)
       a_Html_load_images(doc, popup_url);
 }
 
-/**
+/*
  * Submit form
  */
 static void Menu_form_submit_cb(Fl_Widget*, void*)
@@ -198,7 +223,7 @@ static void Menu_form_submit_cb(Fl_Widget*, void*)
       a_Html_form_submit(doc, popup_form);
 }
 
-/**
+/*
  * Reset form
  */
 static void Menu_form_reset_cb(Fl_Widget*, void*)
@@ -209,7 +234,7 @@ static void Menu_form_reset_cb(Fl_Widget*, void*)
       a_Html_form_reset(doc, popup_form);
 }
 
-/**
+/*
  * Toggle display of 'hidden' form controls.
  */
 static void Menu_form_hiddens_cb(Fl_Widget*, void *user_data)
@@ -221,76 +246,59 @@ static void Menu_form_hiddens_cb(Fl_Widget*, void *user_data)
       a_Html_form_display_hiddens(doc, popup_form, !visible);
 }
 
+/*
+ * Create a new search from a form.
+ */
+static void Menu_form_create_search_cb(Fl_Widget*, void*)
+{
+   void *doc = a_Bw_get_url_doc(popup_bw, popup_url);
+
+   if (doc)
+      a_Html_form_create_search(doc, popup_form);
+}
+
 static void Menu_stylesheet_cb(Fl_Widget*, void *vUrl)
 {
-   int mb = Fl::event_button();
    const DilloUrl *url = (const DilloUrl *) vUrl;
-
-   if (mb == 1) {
-      a_UIcmd_open_url(popup_bw, url);
-   } else if (mb == 2) {
-      if (prefs.middle_click_opens_new_tab) {
-         int focus = prefs.focus_new_tab ? 1 : 0;
-         if (Fl::event_state(FL_SHIFT)) focus = !focus;
-         a_UIcmd_open_url_nt(popup_bw, url, focus);
-      } else {
-         a_UIcmd_open_url_nw(popup_bw, url);
-      }
-   }
+   a_UIcmd_view_page_source(popup_bw, url);
 }
 
-static void Menu_bugmeter_validate(const char *validator_url)
-{
-   if (popup_url &&
-       dStrAsciiCasecmp(URL_SCHEME(popup_url), "dpi")) {
-      const char *popup_str = URL_STR(popup_url),
-                 *ptr = strrchr(popup_str, '#');
-      char *no_fragment = ptr ? dStrndup(popup_str, ptr - popup_str)
-                              : dStrdup(popup_str);
-      char *encoded = a_Url_encode_hex_str(no_fragment);
-      Dstr *dstr = dStr_sized_new(128);
-
-      dStr_sprintf(dstr, validator_url, encoded);
-      a_UIcmd_open_urlstr(popup_bw, dstr->str);
-      dStr_free(dstr, 1);
-      dFree(encoded);
-      dFree(no_fragment);
-   }
-}
-
-/**
- * Validate URL with the W3C Nu validator (for HTML 5)
- */
-static void Menu_bugmeter_validate_w3c_nu_cb(Fl_Widget*, void*)
-{
-   Menu_bugmeter_validate(
-         "https://validator.w3.org/nu/"
-         "?useragent=Validator.nu%%2FLV+https%%3A%%2F%%2Fvalidator.w3.org%%2Fservices"
-         "&acceptlanguage="
-         "&doc=%s");
-}
-
-/**
- * Validate URL with the W3C legacy validator (HTML 4.01 and older)
+/*
+ * Validate URL with the W3C
  */
 static void Menu_bugmeter_validate_w3c_cb(Fl_Widget*, void*)
 {
-   Menu_bugmeter_validate(
-         "https://validator.w3.org/check?uri=%s"
-         "&charset=%%28detect+automatically%%29"
-         "&doctype=Inline&group=0"
-         "&user-agent=W3C_Validator%%2F1.3+");
+   Dstr *dstr = dStr_sized_new(128);
+
+   dStr_sprintf(dstr, "http://validator.w3.org/check?uri=%s",
+                URL_STR(popup_url));
+   a_UIcmd_open_urlstr(popup_bw, dstr->str);
+   dStr_free(dstr, 1);
 }
 
-/**
+/*
+ * Validate URL with the WDG
+ */
+static void Menu_bugmeter_validate_wdg_cb(Fl_Widget*, void*)
+{
+   Dstr *dstr = dStr_sized_new(128);
+
+   dStr_sprintf(dstr,
+      "http://www.htmlhelp.org/cgi-bin/validate.cgi?url=%s&warnings=yes",
+      URL_STR(popup_url));
+   a_UIcmd_open_urlstr(popup_bw, dstr->str);
+   dStr_free(dstr, 1);
+}
+
+/*
  * Show info page for the bug meter
  */
 static void Menu_bugmeter_about_cb(Fl_Widget*, void*)
 {
-   a_UIcmd_open_urlstr(popup_bw, "https://dillo-browser.github.io/old/help/bug_meter.html");
+   a_UIcmd_open_urlstr(popup_bw, "http://www.dillo.org/help/bug_meter.html");
 }
 
-/**
+/*
  * Navigation History callback.
  * Go to selected URL.
  */
@@ -320,36 +328,16 @@ static void Menu_history_cb(Fl_Widget*, void *data)
  * avoid a segfault when a new page replaces the page that issued
  * the popup menu.
  */
-static void Menu_simple_popup_cb(void *data)
+static void Menu_popup_cb(void *data)
 {
-   const Fl_Menu_Item *m;
-
-   ((UI*)popup_bw->ui)->window()->cursor(FL_CURSOR_DEFAULT);
-
-   m = ((Fl_Menu_Item *)data)->popup(popup_x, popup_y);
+   const Fl_Menu_Item *m = ((Fl_Menu_Item *)data)->popup(popup_x, popup_y);
 
    if (m && m->callback())
       m->do_callback((Fl_Widget *)data);
-   a_Timeout_remove();
+   a_Timeout_remove(Menu_popup_cb, data);
 }
 
-static void Menu_popup_cb(void *data)
-{
-   const Fl_Menu_Item *picked;
-   Menu_popup_data_t *d = (Menu_popup_data_t *)data;
-
-   ((UI*)popup_bw->ui)->window()->cursor(FL_CURSOR_DEFAULT);
-
-   picked = d->menu->popup(popup_x, popup_y, d->title, d->picked);
-   if (picked) {
-      d->picked = picked;
-      if (picked->callback())
-         picked->do_callback((Fl_Widget *)(d->menu));
-   }
-   a_Timeout_remove();
-}
-
-/**
+/*
  * Page popup menu (construction & popup)
  */
 void a_Menu_page_popup(BrowserWindow *bw, const DilloUrl *url,
@@ -361,16 +349,27 @@ void a_Menu_page_popup(BrowserWindow *bw, const DilloUrl *url,
 
    static Fl_Menu_Item *stylesheets = NULL;
    static Fl_Menu_Item pm[] = {
-      {"View page source", 0, Menu_view_page_source_cb,0,0,0,0,0,0},
-      {"View page bugs", 0, Menu_view_page_bugs_cb,0,0,0,0,0,0},
-      {"View stylesheets", 0, Menu_nop_cb,0,FL_SUBMENU_POINTER|FL_MENU_DIVIDER,
+      {"&Copy selection", Keys::getShortcut(KEYS_COPY),
+       Menu_copy_selection_cb,0,0,0,0,0,0},
+      {"Copy page UR&L", 0, Menu_copy_location_cb,0,FL_MENU_DIVIDER,
        0,0,0,0},
-      {"Bookmark this page", 0,Menu_add_bookmark_cb,0,FL_MENU_DIVIDER,0,0,0,0},
-      {"Find text", 0, Menu_find_text_cb,0,0,0,0,0,0},
-      {"Save page as...", 0, Menu_save_page_cb,0,0,0,0,0,0},
+      {"View page &source", Keys::getShortcut(KEYS_VIEW_SOURCE),
+       Menu_view_page_source_cb,0,0,0,0,0,0},
+      {"View page &bugs", 0, Menu_view_page_bugs_cb,0,0,0,0,0,0},
+      {"View s&tylesheets", 0, Menu_nop_cb,0,FL_SUBMENU_POINTER|FL_MENU_DIVIDER,
+       0,0,0,0},
+      {"&Bookmark this page", Keys::getShortcut(KEYS_ADD_BOOKMARK),
+       Menu_add_bookmark_cb,0,FL_MENU_DIVIDER,0,0,0,0},
+      {"&Find text", Keys::getShortcut(KEYS_FIND),
+       Menu_find_text_cb,0,0,0,0,0,0},
+      {"S&ave page as...", Keys::getShortcut(KEYS_SAVE),
+       Menu_save_page_cb,0,0,0,0,0,0},
+#ifdef ENABLE_PRINTER
+      {"&Print page...", Keys::getShortcut(KEYS_PRINT),
+       Menu_print_page_cb,0,0,0,0,0,0},
+#endif /* ENABLE_PRINTER */
       {0,0,0,0,0,0,0,0,0}
    };
-   static Menu_popup_data_t page_data = {"Page menu", NULL, pm};
 
    popup_x = Fl::event_x();
    popup_y = Fl::event_y();
@@ -378,15 +377,7 @@ void a_Menu_page_popup(BrowserWindow *bw, const DilloUrl *url,
    a_Url_free(popup_url);
    popup_url = a_Url_dup(url);
 
-   has_bugs == TRUE ? pm[1].activate() : pm[1].deactivate();
-
-   if (dStrAsciiCasecmp(URL_SCHEME(url), "dpi") == 0 &&
-       strncmp(URL_PATH(url), "/vsource/", 9) == 0)
-      pm[0].deactivate();
-   else {
-      pm[0].activate();
-      pm[0].user_data(popup_url);
-   }
+   has_bugs == TRUE ? pm[3].activate() : pm[3].deactivate();
 
    if (stylesheets) {
       while (stylesheets[j].text) {
@@ -400,156 +391,56 @@ void a_Menu_page_popup(BrowserWindow *bw, const DilloUrl *url,
 
    if (cssUrls && cssUrls->size () > 0) {
       stylesheets = new Fl_Menu_Item[cssUrls->size() + 1];
-      memset(stylesheets, '\0', (cssUrls->size() + 1) * sizeof(Fl_Menu_Item));
+      memset(stylesheets, '\0', sizeof(Fl_Menu_Item[cssUrls->size() + 1]));
 
       for (j = 0; j < cssUrls->size(); j++) {
+
+         /* may want ability to Load individual unloaded stylesheets as well */
+         const char *action = "View ";
          DilloUrl *url = cssUrls->get(j);
          const char *url_str = URL_STR(url);
          const uint_t head_length = 30, tail_length = 40,
-                      url_len = strlen(url_str);
+                      url_len = strlen(url_str);;
          char *label;
 
          if (url_len > head_length + tail_length + 3) {
             /* trim long URLs when making the label */
             char *url_head = dStrndup(url_str, head_length);
             const char *url_tail = url_str + (url_len - tail_length);
-            label = dStrconcat(url_head, "...", url_tail, NULL);
+            label = dStrconcat(action, url_head, "...", url_tail, NULL);
             dFree(url_head);
          } else {
-            label = dStrdup(url_str);
+            label = dStrconcat(action, url_str, NULL);
          }
 
-         stylesheets[j].label(FL_NORMAL_LABEL, label);
+         stylesheets[j].label(FL_FREE_LABELTYPE, label);
          stylesheets[j].callback(Menu_stylesheet_cb, a_Url_dup(url));
       }
 
-      pm[2].user_data(stylesheets);
-      pm[2].activate();
+      pm[4].user_data(stylesheets);
+      pm[4].activate();
    } else {
-      pm[2].deactivate();
+      pm[4].deactivate();
    }
-   pm[3].user_data(popup_url);
 
-   a_Timeout_add(0.0, Menu_popup_cb, (void*)&page_data);
+   a_Timeout_add(0.0, Menu_popup_cb, (void*)pm);
 }
 
-static Fl_Menu_Item link_menu_[] = {
-   {"Open link in new tab", 0, Menu_open_url_nt_cb,0,0,0,0,0,0},
-   {"Open link in new window", 0, Menu_open_url_nw_cb,0,FL_MENU_DIVIDER,0,0,
-    0,0},
-   {"Bookmark this link", 0, Menu_add_bookmark_cb,0,0,0,0,0,0},
-   {"Copy link location", 0, Menu_copy_urlstr_cb,0,FL_MENU_DIVIDER,0,0,0,0},
-   {"Save link as...", 0, Menu_save_link_cb,0,FL_MENU_DIVIDER,0,0,0,0},
-   {0,0,0,0,0,0,0,0,0}
-};
-
-/* As we can only provide a pointer to the link menu items, we need to
- * create an auxiliary structure to hold the current URL and the program
- * that should run on each item. */
-struct link_menu_item {
-   const DilloUrl *url;
-   const DilloUrl *origin;
-   Action *action;
-};
-
-/**
- * Open URL following a custom action
- */
-static void Menu_open_url_action_cb(Fl_Widget*, void *user_data)
-{
-   /* Don't use popup_url because it is used for the image URL when coming from
-    * the image menu. We should get rid of the global variables and pass them
-    * via the user_data. */
-
-   struct link_menu_item *mitem = (struct link_menu_item *) user_data;
-   const DilloUrl *url = mitem->url;
-   const DilloUrl *origin = mitem->origin;
-   Action *action = mitem->action;
-
-   /* Set the environment variables */
-   setenv("url", URL_STR(url), 1);
-   setenv("origin", URL_STR(origin), 1);
-
-   if (fork() == 0) {
-      /* Child */
-      errno = 0;
-      int ret = system(action->cmd);
-      if (ret == -1) {
-         MSG("Cannot run '%s': %s\n", action->cmd, strerror(errno));
-         exit(1);
-      } else if (ret != 0) {
-         MSG("Command exited with '%d': %s\n", ret, action->cmd);
-         exit(1);
-      } else {
-         /* All good, terminate the child */
-         exit(0);
-      }
-   }
-}
-
-static Fl_Menu_Item *get_link_menu(void)
-{
-   static Fl_Menu_Item *link_menu = NULL;
-   static struct link_menu_item *link_menu_item = NULL;
-
-   /* Already initialized */
-   if (link_menu != NULL)
-      return link_menu;
-
-   Dlist *actions = a_Actions_link_get();
-   int nactions = dList_length(actions);
-
-   /* Count static menu entries */
-   int nstatic = 0;
-   while (link_menu_[nstatic].text)
-      nstatic++;
-
-   int ntotal = nstatic + nactions;
-   link_menu = (Fl_Menu_Item *) calloc(ntotal + 1, sizeof(Fl_Menu_Item));
-   link_menu_item = (struct link_menu_item *) calloc(nactions, sizeof(struct link_menu_item));
-
-   /* Just copy the static entries */
-   for (int i = 0; i < nstatic; i++) {
-      memcpy(&link_menu[i], &link_menu_[i], sizeof(Fl_Menu_Item));
-   }
-
-   /* And append the dynamic ones */
-   for (int i = 0; i < nactions; i++) {
-      Action *action = (Action *) dList_nth_data(actions, i);
-      struct link_menu_item *mitem = &link_menu_item[i];
-      mitem->url = NULL; /* Not known yet */
-      mitem->action = action;
-
-      Fl_Menu_Item *item = &link_menu[nstatic + i];
-      item->text = action->label;
-      item->callback_ = Menu_open_url_action_cb;
-      item->user_data_ = mitem;
-   }
-
-   return link_menu;
-}
-
-static void Menu_set_link_menu_user_data(const DilloUrl *url, const DilloUrl *page_url)
-{
-   Fl_Menu_Item *link_menu = get_link_menu();
-   for (int i = 0; link_menu[i].label(); i++) {
-      if (link_menu[i].callback_ == Menu_open_url_action_cb) {
-         struct link_menu_item *mitem = (struct link_menu_item *) link_menu[i].user_data_;
-         /* Set the url and origin */
-         mitem->url = url;
-         mitem->origin = page_url;
-      } else {
-         link_menu[i].user_data_ = (void *) url;
-      }
-   }
-}
-
-/**
+/*
  * Link popup menu (construction & popup)
  */
-void a_Menu_link_popup(BrowserWindow *bw, const DilloUrl *url, const DilloUrl *page_url)
+void a_Menu_link_popup(BrowserWindow *bw, const DilloUrl *url)
 {
-   static Menu_popup_data_t link_data = {"Link menu", NULL, NULL};
+   static Fl_Menu_Item pm[] = {
+      {"Open link in new &tab", 0, Menu_open_url_nt_cb,0,0,0,0,0,0},
+      {"Open link in new &window", 0, Menu_open_url_nw_cb,0,FL_MENU_DIVIDER,0,
+       0,0,0},
+      {"&Bookmark this link", 0, Menu_add_bookmark_cb,0,0,0,0,0,0},
+      {"&Copy link location", 0, Menu_copy_urlstr_cb,0,FL_MENU_DIVIDER,0,0,0,
+       0},
+      {"S&ave link as...", 0, Menu_save_link_cb,0,0,0,0,0,0},
+      {0,0,0,0,0,0,0,0,0}
+   };
 
    popup_x = Fl::event_x();
    popup_y = Fl::event_y();
@@ -557,15 +448,10 @@ void a_Menu_link_popup(BrowserWindow *bw, const DilloUrl *url, const DilloUrl *p
    a_Url_free(popup_url);
    popup_url = a_Url_dup(url);
 
-   Fl_Menu_Item *link_menu = get_link_menu();
-   link_data.menu = link_menu;
-
-   Menu_set_link_menu_user_data(popup_url, page_url);
-
-   a_Timeout_add(0.0, Menu_popup_cb, (void*)&link_data);
+   a_Timeout_add(0.0, Menu_popup_cb, (void*)pm);
 }
 
-/**
+/*
  * Image popup menu (construction & popup)
  */
 void a_Menu_image_popup(BrowserWindow *bw, const DilloUrl *url,
@@ -575,18 +461,18 @@ void a_Menu_image_popup(BrowserWindow *bw, const DilloUrl *url,
    static DilloUrl *popup_page_url = NULL;
    static DilloUrl *popup_link_url = NULL;
    static Fl_Menu_Item pm[] = {
-      {"Isolate image", 0, Menu_open_url_cb,0,0,0,0,0,0},
-      {"Open image in new tab", 0, Menu_open_url_nt_cb,0,0,0,0,0,0},
-      {"Open image in new window", 0, Menu_open_url_nw_cb, 0, FL_MENU_DIVIDER,
+      {"&Isolate image", 0, Menu_open_url_cb,0,0,0,0,0,0},
+      {"Open image in new &tab", 0, Menu_open_url_nt_cb,0,0,0,0,0,0},
+      {"Open image in new &window", 0, Menu_open_url_nw_cb, 0, FL_MENU_DIVIDER,
        0,0,0,0},
-      {"Load image", 0, Menu_load_images_cb,0,0,0,0,0,0},
-      {"Bookmark this image", 0, Menu_add_bookmark_cb,0,0,0,0,0,0},
-      {"Copy image location", 0,Menu_copy_urlstr_cb,0,FL_MENU_DIVIDER,0,0,0,0},
-      {"Save image as...", 0, Menu_save_link_cb, 0, FL_MENU_DIVIDER,0,0,0,0},
-      {"Link menu", 0, Menu_nop_cb, get_link_menu(), FL_SUBMENU_POINTER,0,0,0,0},
+      {"&Load image", 0, Menu_load_images_cb,0,0,0,0,0,0},
+      {"&Bookmark this image", 0, Menu_add_bookmark_cb,0,0,0,0,0,0},
+      {"&Copy image location", 0,Menu_copy_urlstr_cb,0,FL_MENU_DIVIDER,0,0,0,
+       0},
+      {"S&ave image as...", 0, Menu_save_link_cb, 0, FL_MENU_DIVIDER,0,0,0,0},
+      {"Link &menu", 0, Menu_link_cb,0,0,0,0,0,0},
       {0,0,0,0,0,0,0,0,0}
    };
-   static Menu_popup_data_t image_data = {"Image menu", NULL, pm};
 
    popup_x = Fl::event_x();
    popup_y = Fl::event_y();
@@ -599,10 +485,6 @@ void a_Menu_image_popup(BrowserWindow *bw, const DilloUrl *url,
    popup_link_url = a_Url_dup(link_url);
 
 
-   pm[0].user_data(popup_url);
-   pm[1].user_data(popup_url);
-   pm[2].user_data(popup_url);
-
    if (loaded_img) {
       pm[3].deactivate();
    } else {
@@ -610,21 +492,17 @@ void a_Menu_image_popup(BrowserWindow *bw, const DilloUrl *url,
       pm[3].user_data(popup_page_url);
    }
 
-   pm[4].user_data(popup_url);
-   pm[5].user_data(popup_url);
-   pm[6].user_data(popup_url);
-
    if (link_url) {
       pm[7].activate();
-      Menu_set_link_menu_user_data(popup_link_url, popup_page_url);
+      pm[7].user_data(popup_link_url);
    } else {
       pm[7].deactivate();
    }
 
-   a_Timeout_add(0.0, Menu_popup_cb, (void*)&image_data);
+   a_Timeout_add(0.0, Menu_popup_cb, (void*)pm);
 }
 
-/**
+/*
  * Form popup menu (construction & popup)
  */
 void a_Menu_form_popup(BrowserWindow *bw, const DilloUrl *page_url,
@@ -632,12 +510,12 @@ void a_Menu_form_popup(BrowserWindow *bw, const DilloUrl *page_url,
 {
    static bool hiddens_visible;
    static Fl_Menu_Item pm[] = {
-      {"Submit form", 0, Menu_form_submit_cb,0,0,0,0,0,0},
-      {"Reset form", 0, Menu_form_reset_cb,0,0,0,0,0,0},
-      {0, 0, Menu_form_hiddens_cb, &hiddens_visible, 0,0,0,0,0},
+      {"&Submit form", 0, Menu_form_submit_cb,0,0,0,0,0,0},
+      {"&Reset form", 0, Menu_form_reset_cb,0,0,0,0,0,0},
+      {0, 0, Menu_form_hiddens_cb, &hiddens_visible, FL_MENU_DIVIDER,0,0,0,0},
+      {"&Add search engine...", 0, Menu_form_create_search_cb, 0,0,0,0,0,0},
       {0,0,0,0,0,0,0,0,0}
    };
-   static Menu_popup_data_t form_data = {"Form menu", NULL, pm};
 
    popup_x = Fl::event_x();
    popup_y = Fl::event_y();
@@ -647,12 +525,12 @@ void a_Menu_form_popup(BrowserWindow *bw, const DilloUrl *page_url,
    popup_form = formptr;
 
    hiddens_visible = hidvis;
-   pm[2].label(hiddens_visible ? "Hide hiddens": "Show hiddens");
+   pm[2].label(hiddens_visible ? "Hide &hiddens": "Show &hiddens");
 
-   a_Timeout_add(0.0, Menu_popup_cb, (void*)&form_data);
+   a_Timeout_add(0.0, Menu_popup_cb, (void*)pm);
 }
 
-/**
+/*
  * File popup menu (construction & popup)
  */
 void a_Menu_file_popup(BrowserWindow *bw, void *v_wid)
@@ -660,17 +538,21 @@ void a_Menu_file_popup(BrowserWindow *bw, void *v_wid)
    Fl_Widget *wid = (Fl_Widget*)v_wid;
 
    static Fl_Menu_Item pm[] = {
-      {"New tab", Keys::getShortcut(KEYS_NEW_TAB), filemenu_cb,
+      {"&New tab", Keys::getShortcut(KEYS_NEW_TAB), filemenu_cb,
        (void*)"nt",0,0,0,0,0},
-      {"New window", Keys::getShortcut(KEYS_NEW_WINDOW), filemenu_cb,
+      {"New &window", Keys::getShortcut(KEYS_NEW_WINDOW), filemenu_cb,
        (void*)"nw", FL_MENU_DIVIDER,0,0,0,0},
-      {"Open file...", Keys::getShortcut(KEYS_OPEN), filemenu_cb,
+      {"&Open...", Keys::getShortcut(KEYS_OPEN), filemenu_cb,
        (void*)"of",0,0,0,0,0},
-      {"Open URL...", Keys::getShortcut(KEYS_GOTO), filemenu_cb,
-       (void*)"ou",0,0,0,0,0},
-      {"Close", Keys::getShortcut(KEYS_CLOSE_TAB), filemenu_cb,
+      {"S&ave as...", Keys::getShortcut(KEYS_SAVE), filemenu_cb,
+       (void*)"sa",0,0,0,0,0},
+      {"&Close", Keys::getShortcut(KEYS_CLOSE_TAB), filemenu_cb,
        (void*)"cw", FL_MENU_DIVIDER,0,0,0,0},
-      {"Exit Dillo", Keys::getShortcut(KEYS_CLOSE_ALL), filemenu_cb,
+#ifdef ENABLE_PRINTER
+      {"&Print...", Keys::getShortcut(KEYS_PRINT), filemenu_cb,
+       (void*)"pr", FL_MENU_DIVIDER,0,0,0,0},
+#endif /* ENABLE_PRINTER */
+      {"E&xit", Keys::getShortcut(KEYS_CLOSE_ALL), filemenu_cb,
        (void*)"ed",0,0,0,0,0},
       {0,0,0,0,0,0,0,0,0}
    };
@@ -682,21 +564,52 @@ void a_Menu_file_popup(BrowserWindow *bw, void *v_wid)
    popup_url = NULL;
 
    //pm->label(wid->visible() ? NULL : "File");
-   a_Timeout_add(0.0, Menu_simple_popup_cb, (void*)pm);
+   a_Timeout_add(0.0, Menu_popup_cb, (void*)pm);
 }
 
-/**
+/*
+ * Search popup menu (construction & popup)
+ */
+void a_Menu_search_popup(BrowserWindow *bw, void *v_wid)
+{
+   Fl_Widget *wid = (Fl_Widget*)v_wid;
+   static Fl_Menu_Item *pm = 0;
+   int i, n = dList_length(prefs.search_urls);
+
+   popup_bw = bw;
+   popup_x = wid->x();
+   popup_y = wid->y() + wid->h();
+
+   if (pm)
+      delete [] pm;
+
+   pm = new Fl_Menu_Item[n + 1];
+   memset(pm, '\0', sizeof(Fl_Menu_Item[n + 1]));
+
+   for (i = 0; i < n; i++) {
+      char *label, *url, *source;
+      source = (char *)dList_nth_data(prefs.search_urls, i);
+      if (!source || a_Misc_parse_search_url(source, &label, &url) < 0)
+         continue;
+      if (i == prefs.search_url_idx)
+         pm[i].set();
+      pm[i].flags |= FL_MENU_RADIO;
+      pm[i].label(FL_FREE_LABELTYPE, strdup(label));
+      pm[i].callback(searchmenu_cb, (void*)i);
+   }
+   a_Timeout_add(0.0, Menu_popup_cb, (void*)pm);
+}
+
+/*
  * Bugmeter popup menu (construction & popup)
  */
 void a_Menu_bugmeter_popup(BrowserWindow *bw, const DilloUrl *url)
 {
    static Fl_Menu_Item pm[] = {
-      {"Validate URL with W3C Nu validator (HTML5 only)", 0,
-         Menu_bugmeter_validate_w3c_nu_cb,0,0,0,0,0,0},
-      {"Validate URL with W3C validator (HTML 4.01 and older)", 0,
-         Menu_bugmeter_validate_w3c_cb,0,FL_MENU_DIVIDER,0,0,0,0},
-      {"About bug meter", 0,
-         Menu_bugmeter_about_cb,0,0,0,0,0,0},
+      {"Validate URL with W3C", 0, Menu_bugmeter_validate_w3c_cb,0,0,0,0,0,0},
+      {"Validate URL with WDG", 0, Menu_bugmeter_validate_wdg_cb, 0,
+       FL_MENU_DIVIDER,0,0,0,0},
+      {"About bug meter", 0, Menu_bugmeter_about_cb,0,0,0,0,0,0},
       {0,0,0,0,0,0,0,0,0}
    };
 
@@ -706,22 +619,22 @@ void a_Menu_bugmeter_popup(BrowserWindow *bw, const DilloUrl *url)
    a_Url_free(popup_url);
    popup_url = a_Url_dup(url);
 
-   a_Timeout_add(0.0, Menu_simple_popup_cb, (void*)pm);
+   a_Timeout_add(0.0, Menu_popup_cb, (void*)pm);
 }
 
-/**
- * Navigation History popup menu (construction & popup).
+/*
+ * Navigation History popup menu (construction & popup)
  *
  * direction: {backward = -1, forward = 1}
  */
-void a_Menu_history_popup(BrowserWindow *bw, int x, int y, int direction)
+void a_Menu_history_popup(BrowserWindow *bw, int direction)
 {
    static Fl_Menu_Item *pm = 0;
    int i, n;
 
    popup_bw = bw;
-   popup_x = x;
-   popup_y = y;
+   popup_x = Fl::event_x();
+   popup_y = Fl::event_y();
    history_direction = direction;
 
    // TODO: hook popdown event with delete or similar.
@@ -737,16 +650,16 @@ void a_Menu_history_popup(BrowserWindow *bw, int x, int y, int direction)
       ;
 
    pm = new Fl_Menu_Item[n + 1];
-   memset(pm, '\0', (n + 1) * sizeof(Fl_Menu_Item));
+   memset(pm, '\0', sizeof(Fl_Menu_Item[n + 1]));
 
    for (i = 0; i < n; i++) {
-      pm[i].label(FL_NORMAL_LABEL, a_History_get_title(history_list[i], 1));
+      pm[i].label(FL_FREE_LABELTYPE, a_History_get_title(history_list[i], 1));
       pm[i].callback(Menu_history_cb, INT2VOIDP(i+1));
    }
-   a_Timeout_add(0.0, Menu_simple_popup_cb, (void*)pm);
+   a_Timeout_add(0.0, Menu_popup_cb, (void*)pm);
 }
 
-/**
+/*
  * Toggle use of remote stylesheets
  */
 static void Menu_remote_css_cb(Fl_Widget *wid, void*)
@@ -758,7 +671,7 @@ static void Menu_remote_css_cb(Fl_Widget *wid, void*)
    a_UIcmd_repush(popup_bw);
 }
 
-/**
+/*
  * Toggle use of embedded CSS style
  */
 static void Menu_embedded_css_cb(Fl_Widget *wid, void*)
@@ -767,19 +680,6 @@ static void Menu_embedded_css_cb(Fl_Widget *wid, void*)
 
    item->flags ^= FL_MENU_VALUE;
    prefs.parse_embedded_css = item->flags & FL_MENU_VALUE ? 1 : 0;
-   a_UIcmd_repush(popup_bw);
-}
-
-
-/**
- * Toggle use of force https mode
- */
-static void Menu_force_https_cb(Fl_Widget *wid, void*)
-{
-   Fl_Menu_Item *item = (Fl_Menu_Item*) wid;
-
-   item->flags ^= FL_MENU_VALUE;
-   prefs.http_force_https = item->flags & FL_MENU_VALUE ? 1 : 0;
    a_UIcmd_repush(popup_bw);
 }
 
@@ -793,7 +693,7 @@ static void Menu_panel_change_cb(Fl_Widget*, void *user_data)
       ui->change_panel(VOIDP2INT(user_data), ui->get_smallicons());
 }
 
-/**
+/*
  * Toggle loading of images -- and load them if enabling.
  */
 static void Menu_imgload_toggle_cb(Fl_Widget *wid, void*)
@@ -812,24 +712,13 @@ static void Menu_imgload_toggle_cb(Fl_Widget *wid, void*)
    }
 }
 
-/**
- * Toggle loading of background images.
+/*
+ * Tools popup menu (construction & popup)
  */
-static void Menu_bgimg_load_toggle_cb(Fl_Widget *wid, void*)
-{
-   Fl_Menu_Item *item = (Fl_Menu_Item*) wid;
-
-   item->flags ^= FL_MENU_VALUE;
-   prefs.load_background_images = item->flags & FL_MENU_VALUE ? 1 : 0;
-   a_UIcmd_repush(popup_bw);
-}
-
-/**
- * Tools popup menu (construction & popup).
- */
-void a_Menu_tools_popup(BrowserWindow *bw, int x, int y)
+void a_Menu_tools_popup(BrowserWindow *bw, void *v_wid)
 {
    const Fl_Menu_Item *item;
+   Fl_Widget *wid = (Fl_Widget*)v_wid;
    UI *ui = (UI*)bw->ui;
 
    static Fl_Menu_Item pm[] = {
@@ -837,10 +726,6 @@ void a_Menu_tools_popup(BrowserWindow *bw, int x, int y)
       {"Use embedded CSS", 0, Menu_embedded_css_cb, 0,
        FL_MENU_TOGGLE|FL_MENU_DIVIDER,0,0,0,0},
       {"Load images", 0, Menu_imgload_toggle_cb, 0,
-       FL_MENU_TOGGLE,0,0,0,0},
-      {"Load background images", 0, Menu_bgimg_load_toggle_cb, 0,
-       FL_MENU_TOGGLE|FL_MENU_DIVIDER,0,0,0,0},
-      {"Force HTTPS", 0, Menu_force_https_cb, 0,
        FL_MENU_TOGGLE|FL_MENU_DIVIDER,0,0,0,0},
       {"Panel size", 0, Menu_nop_cb, (void*)"Submenu1", FL_SUBMENU,0,0,0,0},
          {"tiny",  0,Menu_panel_change_cb,(void*)0,FL_MENU_RADIO,0,0,0,0},
@@ -863,14 +748,10 @@ void a_Menu_tools_popup(BrowserWindow *bw, int x, int y)
       pm[1].set();
    if (prefs.load_images)
       pm[2].set();
-   if (prefs.load_background_images)
-      pm[3].set();
-   if (prefs.http_force_https)
-      pm[4].set();
-   pm[6+cur_panelsize].setonly();
-   cur_smallicons ? pm[9].set() : pm[9].clear();
+   pm[4+cur_panelsize].setonly();
+   cur_smallicons ? pm[7].set() : pm[7].clear();
 
-   item = pm->popup(x, y);
+   item = pm->popup(wid->x(), wid->y() + wid->h());
    if (item) {
       ((Fl_Widget *)item)->do_callback();
    }

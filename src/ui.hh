@@ -5,13 +5,13 @@
 
 #include <FL/Fl_Window.H>
 #include <FL/Fl_Widget.H>
+#include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Input.H>
-#include <FL/Fl_Output.H>
 #include <FL/Fl_Image.H>
 #include <FL/Fl_Tabs.H>
+#include <FL/Fl_Hor_Slider.H>
 
-#include "tipwin.hh"
 #include "findbar.hh"
 
 typedef enum {
@@ -19,7 +19,6 @@ typedef enum {
    UI_FORW,
    UI_HOME,
    UI_RELOAD,
-   UI_SAVE,
    UI_STOP,
    UI_BOOK,
    UI_TOOLS,
@@ -28,7 +27,7 @@ typedef enum {
 } UIButton;
 
 typedef enum {
-   UI_NORMAL = 0,     /**< make sure it's compatible with bool */
+   UI_NORMAL = 0,     /* make sure it's compatible with bool */
    UI_HIDDEN = 1
 } UIPanelmode;
 
@@ -43,10 +42,10 @@ class CustTabs;
 
 
 // Class definitions ---------------------------------------------------------
-/**
+/*
  * Used to reposition group's widgets when some of them are hidden.
  * All children get the height of the group but retain their original width.
- * The resizable child gets the remaining space.
+ * The resizable child get's the remaining space.
  */
 class CustGroupHorizontal : public Fl_Group {
    Fl_Widget *rsz;
@@ -116,21 +115,87 @@ public:
   }
 };
 
+/*
+ * A button that highlights on mouse over
+ */
+class CustLightButton : public Fl_Button {
+protected:
+   bool flat;
+   Fl_Color norm_color, light_color;
+public:
+   CustLightButton(int x, int y, int w, int h, const char *l=0) :
+      Fl_Button(x,y,w,h,l)
+   {
+      flat = false;
+      norm_color = color();
+      light_color = fl_lighter(norm_color);
+   }
+   virtual int handle(int e)
+   {
+      if (active()) {
+         if (e == FL_ENTER) {
+            if (flat)
+               box(FL_THIN_UP_BOX);
+            color(light_color); // {17,26,51}
+            redraw();
+         } else if (e == FL_LEAVE || e == FL_RELEASE || e == FL_HIDE) {
+            if (flat)
+               box(FL_FLAT_BOX);
+            color(norm_color);
+            redraw();
+         }
+      } else if (e == FL_DEACTIVATE && color() != norm_color) {
+         if (flat)
+            box(FL_FLAT_BOX);
+         color(norm_color);
+         redraw();
+      }
+      return Fl_Button::handle(e);
+   }
+   void hl_color(Fl_Color col) { light_color = col; };
+};
+
+/*
+ * A flat button that raises on mouse over
+ */
+class FlatLightButton : public CustLightButton {
+public:
+   FlatLightButton(int x, int y, int w, int h, const char *l=0) :
+      CustLightButton(x,y,w,h,l)
+   {
+      flat = true;
+      box(FL_FLAT_BOX);
+      down_box(FL_THIN_DOWN_FRAME);
+   }
+};
+
+/*
+ * An Fl_Box that behaves like an Fl_Output.
+ */
+class CustOutput : public Fl_Box
+{
+public:
+   CustOutput(int x, int y, int w, int h, const char *l=0) :
+      Fl_Box(x, y, w, h, l) { align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT); };
+   void value(const char *v) { copy_label(v); redraw(); }
+};
 
 //
 // UI class definition -------------------------------------------------------
 //
 class UI : public CustGroupVertical {
    CustTabs *Tabs;
+   char *TabTooltip;
 
    CustGroupVertical *TopGroup;
-   CustButton *Back, *Forw, *Home, *Reload, *Save, *Stop, *Bookmarks,
-              *Tools, *Clear, *Search, *Help, *BugMeter, *FileButton;
-   CustGroupHorizontal *LocBar, *NavBar, *StatusBar;
-   Fl_Input *Location;
+   Fl_Button *Back, *Forw, *Home, *Reload, *Stop, *Bookmarks, *Tools,
+          *SearchButton, *Help, *BugMeter, *FileButton;
+   CustGroupHorizontal *LocBar, *SearchBar, *NavBar, *StatusBar;
+   Fl_Input  *Location, *Search;
    CustProgressBox *PProg, *IProg;
-   Fl_Group *Panel, *Main, *LocationGroup;
-   Fl_Output *StatusOutput;
+   Fl_Group *Panel, *Main;
+   CustOutput *StatusOutput;
+   Fl_Slider *Zoom;
    Findbar *FindBar;
 
    int MainIdx;
@@ -140,13 +205,13 @@ class UI : public CustGroupVertical {
    bool PanelTemporary;
 
    UIPanelmode Panelmode;
-   CustButton *make_button(const char *label, Fl_Image *img, Fl_Image*deimg,
-                           int b_n, int start = 0);
+   Fl_Button *make_button(const char *label, Fl_Image *img,
+                          Fl_Image*deimg, int b_n, int start = 0);
    void make_toolbar(int tw, int th);
    void make_location(int ww);
-   void make_progress_bars(int wide, int thin_up);
+   void make_progress_bars();
    void make_menubar(int x, int y, int w, int h);
-   void make_filemenu_button();
+   Fl_Widget *make_filemenu_button();
    void make_panel(int ww);
    void make_status_bar(int ww, int wh);
 
@@ -155,21 +220,21 @@ public:
    UI(int x,int y,int w,int h, const char* label = 0, const UI *cur_ui=NULL);
    ~UI();
 
-   /** To manage what events to catch and which to let pass */
+   // To manage what events to catch and which to let pass
    int handle(int event);
 
    const char *get_location();
    void set_location(const char *str);
    void focus_location();
+   void focus_search();
    void focus_main();
    void set_status(const char *str);
    void set_page_prog(size_t nbytes, int cmd);
    void set_img_prog(int n_img, int t_img, int cmd);
    void set_bug_prog(int n_bug);
    void set_render_layout(Fl_Group *nw);
-   void customize();
+   void customize(int flags);
    void button_set_sens(UIButton btn, int sens);
-   void paste_url();
    int get_panelsize() { return PanelSize; }
    int get_smallicons() { return Small_Icons; }
    void change_panel(int new_size, int small_icons);

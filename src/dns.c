@@ -9,9 +9,12 @@
  * (at your option) any later version.
  */
 
-/* @file
+/*
  * Non blocking pthread-handled Dns scheme
  */
+
+
+#ifndef ENABLE_LEGACY_DNS
 
 
 /*
@@ -24,13 +27,11 @@
 #endif
 
 
-#include <assert.h>
-#include <netdb.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <fcntl.h>
+/* This must come first to avoid conflicts on Win32. */
+#define DSOCK_TCPIP
+#define DSOCK_WSPIAPI
+#include "../dlib/dsock.h"
+
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -40,7 +41,7 @@
 #include "msg.h"
 #include "dns.h"
 #include "list.h"
-#include "IO/iowatch.hh"
+#include "timeout.hh"
 
 
 /* Maximum dns resolving threads */
@@ -50,40 +51,36 @@
 #  define D_DNS_MAX_SERVERS 1
 #endif
 
-typedef enum {
-   DNS_SERVER_IDLE,
-   DNS_SERVER_PROCESSING,
-   DNS_SERVER_RESOLVED,
-} DnsServerState_t;
 
 typedef struct {
-   int channel;            /**< Index of this channel [0 based] */
-   DnsServerState_t state;
-   Dlist *addr_list;       /**< IP address */
-   char *hostname;         /**< Address to resolve */
-   int status;             /**< errno code for resolving function */
+   int channel;            /* Index of this channel [0 based] */
+   bool_t in_use;          /* boolean to tell if server is doing a lookup */
+   bool_t ip_ready;        /* boolean: is IP lookup done? */
+   Dlist *addr_list;       /* IP address */
+   char *hostname;         /* Adress to resolve */
+   int status;             /* errno code for resolving function */
 #ifdef D_DNS_THREADED
-   pthread_t th1;          /**< Thread id */
+   pthread_t th1;          /* Thread id */
 #endif
 } DnsServer;
 
 typedef struct {
-   char *hostname;         /**< host name for cache */
-   Dlist *addr_list;       /**< addresses of host */
+   char *hostname;         /* host name for cache */
+   Dlist *addr_list;       /* addresses of host */
 } GDnsCache;
 
 typedef struct {
-   int channel;            /**< -2 if waiting, otherwise index to dns_server[] */
-   char *hostname;         /**< The one we're resolving */
-   DnsCallback_t cb_func;  /**< callback function */
-   void *cb_data;          /**< extra data for the callback function */
+   int channel;            /* -2 if waiting, otherwise index to dns_server[] */
+   char *hostname;         /* The one we're resolving */
+   DnsCallback_t cb_func;  /* callback function */
+   void *cb_data;          /* extra data for the callback function */
 } GDnsQueue;
 
 
 /*
  * Forward declarations
  */
-static void Dns_timeout_client(int fd, void *data);
+static void Dns_timeout_client(void *data);
 
 /*
  * Local Data
@@ -94,7 +91,6 @@ static GDnsCache *dns_cache;
 static int dns_cache_size, dns_cache_size_max;
 static GDnsQueue *dns_queue;
 static int dns_queue_size, dns_queue_size_max;
-static int dns_notify_pipe[2];
 
 
 /* ----------------------------------------------------------------------
@@ -111,7 +107,7 @@ static void Dns_queue_add(int channel, const char *hostname,
    dns_queue_size++;
 }
 
-/**
+/*
  * Find hostname index in dns_queue
  * (if found, returns queue index; -1 if not)
  */
@@ -120,13 +116,13 @@ static int Dns_queue_find(const char *hostname)
    int i;
 
    for (i = 0; i < dns_queue_size; i++)
-      if (!dStrAsciiCasecmp(hostname, dns_queue[i].hostname))
+      if (!strcmp(hostname, dns_queue[i].hostname))
          return i;
 
    return -1;
 }
 
-/**
+/*
  * Given an index, remove an entry from the dns_queue
  */
 static void Dns_queue_remove(int index)
@@ -158,7 +154,7 @@ void Dns_queue_print()
 }
  */
 
-/**
+/*
  *  Add an IP/hostname pair to Dns-cache
  */
 static void Dns_cache_add(char *hostname, Dlist *addr_list)
@@ -171,12 +167,12 @@ static void Dns_cache_add(char *hostname, Dlist *addr_list)
 }
 
 
-/**
+/*
  *  Initializer function
  */
 void a_Dns_init(void)
 {
-   int res, i;
+   int i;
 
 #ifdef D_DNS_THREADED
    MSG("dillo_dns_init: Here we go! (threaded)\n");
@@ -194,15 +190,11 @@ void a_Dns_init(void)
 
    num_servers = D_DNS_MAX_SERVERS;
 
-   res = pipe(dns_notify_pipe);
-   assert(res == 0);
-   fcntl(dns_notify_pipe[0], F_SETFL, O_NONBLOCK);
-   a_IOwatch_add_fd(dns_notify_pipe[0], DIO_READ, Dns_timeout_client, NULL);
-
    /* Initialize servers data */
    for (i = 0; i < num_servers; ++i) {
       dns_server[i].channel = i;
-      dns_server[i].state = DNS_SERVER_IDLE;
+      dns_server[i].in_use = FALSE;
+      dns_server[i].ip_ready = FALSE;
       dns_server[i].addr_list = NULL;
       dns_server[i].hostname = NULL;
       dns_server[i].status = 0;
@@ -210,9 +202,21 @@ void a_Dns_init(void)
       dns_server[i].th1 = (pthread_t) -1;
 #endif
    }
+
+#ifdef ENABLE_IPV6
+   /* IPv6 test */
+   {
+      /* If the IPv6 address family is not available there is no point
+         wasting time trying to connect to v6 addresses. */
+      int fd = socket(AF_INET6, SOCK_STREAM, 0);
+      if (fd >= 0) {
+         close(fd);
+      }
+   }
+#endif
 }
 
-/**
+/*
  * Allocate a host structure and add it to the list
  */
 
@@ -259,7 +263,7 @@ static void Dns_note_hosts(Dlist *list, struct addrinfo *res0)
    }
 }
 
-/**
+/*
  *  Server function (runs on its own thread)
  */
 static void *Dns_server(void *data)
@@ -272,11 +276,7 @@ static void *Dns_server(void *data)
    char addr_string[40];
 
    memset(&hints, 0, sizeof(hints));
-#ifdef ENABLE_IPV6
    hints.ai_family = AF_UNSPEC;
-#else
-   hints.ai_family = AF_INET;
-#endif
    hints.ai_socktype = SOCK_STREAM;
 
    hosts = dList_new(2);
@@ -288,7 +288,17 @@ static void *Dns_server(void *data)
 
    if (error != 0) {
       dns_server[channel].status = error;
-      MSG("DNS error: %s\n", gai_strerror(error));
+      if (error == EAI_NONAME)
+         MSG("DNS error: HOST_NOT_FOUND\n");
+      else if (error == EAI_AGAIN)
+         MSG("DNS error: TRY_AGAIN\n");
+#ifdef EAI_NODATA
+      /* Some FreeBSD don't have this anymore */
+      else if (error == EAI_NODATA)
+         MSG("DNS error: NO_ADDRESS\n");
+#endif
+      else if (h_errno == EAI_FAIL)
+         MSG("DNS error: NO_RECOVERY\n");
    } else {
       Dns_note_hosts(hosts, res0);
       dns_server[channel].status = 0;
@@ -316,15 +326,13 @@ static void *Dns_server(void *data)
       MSG(" (nil)\n");
    }
    dns_server[channel].addr_list = hosts;
-   dns_server[channel].state = DNS_SERVER_RESOLVED;
-
-   write(dns_notify_pipe[1], ".", 1);
+   dns_server[channel].ip_ready = TRUE;
 
    return NULL;                 /* (avoids a compiler warning) */
 }
 
 
-/**
+/*
  *  Request function (spawn a server and let it handle the request)
  */
 static void Dns_server_req(int channel, const char *hostname)
@@ -334,10 +342,15 @@ static void Dns_server_req(int channel, const char *hostname)
    static int thrATTRInitialized = 0;
 #endif
 
-   dns_server[channel].state = DNS_SERVER_PROCESSING;
+   dns_server[channel].in_use = TRUE;
+   dns_server[channel].ip_ready = FALSE;
 
    dFree(dns_server[channel].hostname);
    dns_server[channel].hostname = dStrdup(hostname);
+
+   /* Let's set a timeout client to poll the server channel (5 times/sec) */
+   a_Timeout_add(0.2,Dns_timeout_client,
+                 INT2VOIDP(dns_server[channel].channel));
 
 #ifdef D_DNS_THREADED
    /* set the thread attribute to the detached state */
@@ -354,7 +367,7 @@ static void Dns_server_req(int channel, const char *hostname)
 #endif
 }
 
-/**
+/*
  * Return the IP for the given hostname using a callback.
  * Side effect: a thread is spawned when hostname is not cached.
  */
@@ -367,7 +380,7 @@ void a_Dns_resolve(const char *hostname, DnsCallback_t cb_func, void *cb_data)
 
    /* check for cache hit. */
    for (i = 0; i < dns_cache_size; i++)
-      if (!dStrAsciiCasecmp(hostname, dns_cache[i].hostname))
+      if (!strcmp(hostname, dns_cache[i].hostname))
          break;
 
    if (i < dns_cache_size) {
@@ -383,7 +396,7 @@ void a_Dns_resolve(const char *hostname, DnsCallback_t cb_func, void *cb_data)
 
       /* Find a channel we can send the request to */
       for (channel = 0; channel < num_servers; channel++)
-         if (dns_server[channel].state == DNS_SERVER_IDLE)
+         if (!dns_server[channel].in_use)
             break;
       if (channel < num_servers) {
          /* Found a free channel! */
@@ -396,7 +409,7 @@ void a_Dns_resolve(const char *hostname, DnsCallback_t cb_func, void *cb_data)
    }
 }
 
-/**
+/*
  * Give answer to all queued callbacks on this channel
  */
 static void Dns_serve_channel(int channel)
@@ -412,9 +425,11 @@ static void Dns_serve_channel(int channel)
          --i;
       }
    }
+   /* set current channel free */
+   srv->in_use = FALSE;
 }
 
-/**
+/*
  * Assign free channels to waiting clients (-2)
  */
 static void Dns_assign_channels(void)
@@ -422,7 +437,7 @@ static void Dns_assign_channels(void)
    int ch, i, j;
 
    for (ch = 0; ch < num_servers; ++ch) {
-      if (dns_server[ch].state == DNS_SERVER_IDLE) {
+      if (dns_server[ch].in_use == FALSE) {
          /* Find the next query in the queue (we're a FIFO) */
          for (i = 0; i < dns_queue_size; i++)
             if (dns_queue[i].channel == -2)
@@ -433,10 +448,8 @@ static void Dns_assign_channels(void)
              * with the same hostname*/
             for (j = i; j < dns_queue_size; j++)
                if (dns_queue[j].channel == -2 &&
-                   !dStrAsciiCasecmp(dns_queue[j].hostname,
-                                     dns_queue[i].hostname)) {
+                   !strcmp(dns_queue[j].hostname, dns_queue[i].hostname))
                   dns_queue[j].channel = ch;
-               }
             Dns_server_req(ch, dns_queue[i].hostname);
          } else
             return;
@@ -444,35 +457,35 @@ static void Dns_assign_channels(void)
    }
 }
 
-/**
- * This function is called on the main thread and
- * reads the DNS results.
+/*
+ * This is a timeout function that
+ * reads the DNS results and resumes the stopped jobs.
  */
-static void Dns_timeout_client(int fd, void *data)
+static void Dns_timeout_client(void *data)
 {
-   int i;
-   char buf[16];
+   int channel = VOIDP2INT(data);
+   DnsServer *srv = &dns_server[channel];
 
-   while (read(dns_notify_pipe[0], buf, sizeof(buf)) > 0);
-
-   for (i = 0; i < num_servers; ++i) {
-      DnsServer *srv = &dns_server[i];
-
-      if (srv->state == DNS_SERVER_RESOLVED) {
-         if (srv->addr_list != NULL) {
-            /* DNS succeeded, let's cache it */
-            Dns_cache_add(srv->hostname, srv->addr_list);
-         }
-         Dns_serve_channel(i);
-         srv->state = DNS_SERVER_IDLE;
+   if (srv->ip_ready) {
+      if (srv->addr_list != NULL) {
+         /* DNS succeeded, let's cache it */
+         Dns_cache_add(srv->hostname, srv->addr_list);
       }
+      Dns_serve_channel(channel);
+      Dns_assign_channels();
+      /* Explicitly removing this timeout causes all DNS lookups to stop.
+       * Just don't repeat it, and it will eventually stop on its own. */
+      /* a_Timeout_remove(Dns_timeout_client, NULL); */ /* Done! */
+
+   } else {
+      /* IP not already resolved, keep on trying... */
+      a_Timeout_repeat(0.2, Dns_timeout_client, data);
    }
-   Dns_assign_channels();
 }
 
 
-/**
- *  Dns memory-deallocation.
+/*
+ *  Dns memory-deallocation
  *  (Call this one at exit time)
  *  The Dns_queue is deallocated at execution time (no need to do that here)
  *  'dns_cache' is the only one that grows dynamically
@@ -487,13 +500,10 @@ void a_Dns_freeall(void)
          dFree(dList_nth_data(dns_cache[i].addr_list, j));
       dList_free(dns_cache[i].addr_list);
    }
-   a_IOwatch_remove_fd(dns_notify_pipe[0], DIO_READ);
-   dClose(dns_notify_pipe[0]);
-   dClose(dns_notify_pipe[1]);
    dFree(dns_cache);
 }
 
-/**
+/*
  *  Writes a string representation of the given DilloHost
  *  into dst. dst will be \0 terminated.
  *  Please note that dst must be at least 40 bytes long for IPv6
@@ -501,14 +511,18 @@ void a_Dns_freeall(void)
  */
 void a_Dns_dillohost_to_string(DilloHost *host, char *dst, size_t size)
 {
-   if (!inet_ntop(host->af, host->data, dst, size)) {
-      switch (errno) {
-         case EAFNOSUPPORT:
-            snprintf(dst, size, "Unknown address family");
-            break;
-         case ENOSPC:
-            snprintf(dst, size, "Buffer too small");
-            break;
-      }
+   struct sockaddr_in sa_host;
+   sa_host.sin_family = host->af;
+   memcpy(&sa_host.sin_addr, host->data, host->alen);
+
+   switch (getnameinfo((struct sockaddr*)&sa_host, sizeof(sa_host),
+                       dst, size, NULL, 0, NI_NUMERICHOST)) {
+      case EAI_FAMILY:
+         snprintf(dst, size, "Unknown address family");
+      case EAI_MEMORY:
+         snprintf(dst, size, "Buffer too small");
    }
 }
+
+
+#endif /* !ENABLE_LEGACY_DNS */

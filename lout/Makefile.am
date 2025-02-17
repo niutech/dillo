@@ -1,6 +1,5 @@
 AM_CPPFLAGS = \
-	-I$(top_srcdir) \
-	-DCUR_WORKING_DIR='"@BASE_CUR_WORKING_DIR@/lout"'
+	-I$(top_srcdir)
 
 noinst_LIBRARIES = liblout.a
 
@@ -8,7 +7,6 @@ liblout_a_SOURCES = \
 	container.cc \
 	container.hh \
 	debug.hh \
-	debug_rtfl.hh \
 	identity.cc \
 	identity.hh \
 	misc.cc \
@@ -17,6 +15,4 @@ liblout_a_SOURCES = \
 	object.hh \
 	signal.cc \
 	signal.hh \
-	unicode.cc \
-	unicode.hh \
 	msg.h

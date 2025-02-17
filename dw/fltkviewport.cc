@@ -2,7 +2,6 @@
  * Dillo Widget
  *
  * Copyright 2005-2007 Sebastian Geerken <sgeerken@dillo.org>
- * Copyright 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,7 +27,6 @@
 
 #include <stdio.h>
 #include "../lout/msg.h"
-#include "../lout/debug.hh"
 
 using namespace lout;
 using namespace lout::object;
@@ -55,8 +53,6 @@ public:
 FltkViewport::FltkViewport (int X, int Y, int W, int H, const char *label):
    FltkWidgetView (X, Y, W, H, label)
 {
-   DBG_OBJ_CREATE ("dw::fltk::FltkViewport");
-
    hscrollbar = new CustScrollbar (x (), y (), 1, 1);
    hscrollbar->type(FL_HORIZONTAL);
    hscrollbar->callback (hscrollbarCallback, this);
@@ -72,12 +68,6 @@ FltkViewport::FltkViewport (int X, int Y, int W, int H, const char *label):
    hasDragScroll = 1;
    scrollX = scrollY = scrollDX = scrollDY = 0;
    horScrolling = verScrolling = dragScrolling = 0;
-   scrollbarPageMode = false;
-   pageOverlap = 50;
-   pageScrolling = core::NONE_CMD;
-
-   pageScrollDelay = 0.300;
-   pageScrollInterval = 0.100;
 
    gadgetOrientation[0] = GADGET_HORIZONTAL;
    gadgetOrientation[1] = GADGET_HORIZONTAL;
@@ -92,7 +82,6 @@ FltkViewport::FltkViewport (int X, int Y, int W, int H, const char *label):
 FltkViewport::~FltkViewport ()
 {
    delete gadgets;
-   DBG_OBJ_DELETE ();
 }
 
 void FltkViewport::adjustScrollbarsAndGadgetsAllocation ()
@@ -123,27 +112,18 @@ void FltkViewport::adjustScrollbarsAndGadgetsAllocation ()
       vdiff = hscrollbar->visible () ? SCROLLBAR_THICKNESS : 0;
    }
 
-   if (scrollbarOnLeft) {
-      hscrollbar->resize(x () + hdiff, y () + h () - SCROLLBAR_THICKNESS,
-                         w () - hdiff, SCROLLBAR_THICKNESS);
-      vscrollbar->resize(x (), y (),
-                         SCROLLBAR_THICKNESS, h () - vdiff);
-   } else {
-      hscrollbar->resize(x (), y () + h () - SCROLLBAR_THICKNESS,
-                         w () - hdiff, SCROLLBAR_THICKNESS);
-      vscrollbar->resize(x () + w () - SCROLLBAR_THICKNESS, y (),
-                         SCROLLBAR_THICKNESS, h () - vdiff);
-   }
+   hscrollbar->resize(x (), y () + h () - SCROLLBAR_THICKNESS,
+                      w () - hdiff, SCROLLBAR_THICKNESS);
+   vscrollbar->resize(x () + w () - SCROLLBAR_THICKNESS, y (),
+                      SCROLLBAR_THICKNESS, h () - vdiff);
 
-   //int X = x () + w () - SCROLLBAR_THICKNESS;
-   //int Y = y () + h () - SCROLLBAR_THICKNESS;
+   int X = x () + w () - SCROLLBAR_THICKNESS;
+   int Y = y () + h () - SCROLLBAR_THICKNESS;
    for (Iterator <TypedPointer < Fl_Widget> > it = gadgets->iterator ();
         it.hasNext (); ) {
       Fl_Widget *widget = it.getNext()->getTypedValue ();
       widget->resize(x (), y (), SCROLLBAR_THICKNESS, SCROLLBAR_THICKNESS);
 
-      /* FIXME: This has no effect */
-#if 0
       switch (gadgetOrientation [visibility]) {
       case GADGET_VERTICAL:
          Y -= SCROLLBAR_THICKNESS;
@@ -153,10 +133,7 @@ void FltkViewport::adjustScrollbarsAndGadgetsAllocation ()
          X -= SCROLLBAR_THICKNESS;
          break;
       }
-#endif
    }
-
-   adjustScrollbarValues();
 }
 
 void FltkViewport::adjustScrollbarValues ()
@@ -212,56 +189,34 @@ void FltkViewport::draw_area (void *data, int x, int y, int w, int h)
   }
 
   fl_pop_clip();
+
 }
 
-/*
- * Draw the viewport.
- *
- *  + Damage flags come in different ways, draw() should cope with them all.
- *  + Damage flags are alive for visible and hidden widgets.
- *  + FL_DAMAGE_CHILD can flag scroll bars or embedded FLTK widgets.
- */
 void FltkViewport::draw ()
 {
-   const int d = damage(),
-             vis_vs = vscrollbar->visible () ? SCROLLBAR_THICKNESS : 0,
-             vis_hs = hscrollbar->visible () ? SCROLLBAR_THICKNESS : 0,
-             draw = d & (FL_DAMAGE_ALL | FL_DAMAGE_EXPOSE),
-             draw_vs = vis_vs && vscrollbar->damage (),
-             draw_hs = vis_hs && hscrollbar->damage ();
+   int hdiff = vscrollbar->visible () ? SCROLLBAR_THICKNESS : 0;
+   int vdiff = hscrollbar->visible () ? SCROLLBAR_THICKNESS : 0;
+   int d = damage();
 
-   _MSG("FltkViewport::draw d=%d  =>  ", d);
-   // scrollbars
-   if (draw || draw_vs)
-      draw_child (*vscrollbar);
-   if (draw || draw_hs)
-      draw_child (*hscrollbar);
-   if (draw && vis_vs && vis_hs) {
-      fl_color(FL_BACKGROUND_COLOR);
-      if (scrollbarOnLeft) {
-         fl_rectf(x(), y()+h()-vis_hs, vis_vs, vis_hs);
-      } else {
-         fl_rectf(x()+w()-vis_vs, y()+h()-vis_hs, vis_vs, vis_hs);
-      }
-   }
-   // main area
-   if (d == FL_DAMAGE_CHILD && (draw_vs || draw_hs)) {
-      _MSG("none\n");
-   } else if (d == (FL_DAMAGE_SCROLL | FL_DAMAGE_CHILD)) {
-      int x = this->x();
-
-      if (scrollbarOnLeft)
-         x += vis_vs;
-      fl_scroll(x, y(), w() - vis_vs, h() - vis_hs,
+   if (d & FL_DAMAGE_SCROLL) {
+      clear_damage (FL_DAMAGE_SCROLL);
+      fl_scroll(x(), y(), w() - hdiff, h() - vdiff,
                 -scrollDX, -scrollDY, draw_area, this);
-      _MSG("fl_scroll()\n");
-   } else {
-      int x = this->x();
+      clear_damage (d & ~FL_DAMAGE_SCROLL);
+   }
 
-      if (scrollbarOnLeft)
-         x += vis_vs;
-      draw_area(this, x, y(), w() - vis_vs, h() - vis_hs);
-      _MSG("draw_area()\n");
+   if (d) {
+      draw_area(this, x(), y(), w () - hdiff, h () - vdiff);
+
+      if (d == FL_DAMAGE_CHILD) {
+         if (hscrollbar->damage ())
+            draw_child (*hscrollbar);
+         if (vscrollbar->damage ())
+            draw_child (*vscrollbar);
+      } else {
+         draw_child (*hscrollbar);
+         draw_child (*vscrollbar);
+      }
    }
 
    scrollDX = 0;
@@ -270,7 +225,6 @@ void FltkViewport::draw ()
 
 int FltkViewport::handle (int event)
 {
-   int ret = 0;
    _MSG("FltkViewport::handle %s\n", fl_eventnames[event]);
 
    switch(event) {
@@ -279,9 +233,9 @@ int FltkViewport::handle (int event)
        * sends the event here. Returning zero tells FLTK to resend the
        * event as SHORTCUT, which we finally route to the parent. */
 
-      /* As we don't know the exact keybindings set by the user, we ask for
-       * all of them (except for the minimum needed to keep form navigation).*/
-      if (Fl::event_key() != FL_Tab || Fl::event_ctrl())
+      /* As we don't know the exact keybindings set by the user, we ask
+       * for all of them (except Tab to keep form navigation). */
+      if (Fl::event_key() != FL_Tab)
          return 0;
       break;
 
@@ -299,41 +253,8 @@ int FltkViewport::handle (int event)
 
    case FL_PUSH:
       if (vscrollbar->visible() && Fl::event_inside(vscrollbar)) {
-         if (scrollbarPageMode ^ (bool) Fl::event_shift()) {
-            /* Check top and bottom actions first */
-            int yclick = Fl::event_y();
-            int ytop = y() + SCROLLBAR_THICKNESS;
-            int ybottom = y() + h() - SCROLLBAR_THICKNESS;
-            if (hscrollbar->visible())
-               ybottom -= SCROLLBAR_THICKNESS;
-
-            if (yclick <= ytop) {
-               scroll(core::TOP_CMD);
-               return 1;
-            } else if (yclick >= ybottom) {
-               scroll(core::BOTTOM_CMD);
-               return 1;
-            }
-
-            if (Fl::event_button() == FL_LEFT_MOUSE)
-               pageScrolling = core::SCREEN_DOWN_CMD;
-            else if (Fl::event_button() == FL_RIGHT_MOUSE)
-               pageScrolling = core::SCREEN_UP_CMD;
-            else
-               pageScrolling = core::NONE_CMD;
-
-            if (pageScrolling != core::NONE_CMD) {
-               scroll(pageScrolling);
-               /* Repeat until released */
-               if (!Fl::has_timeout(repeatPageScroll, this))
-                  Fl::add_timeout(pageScrollDelay, repeatPageScroll, this);
-
-               return 1;
-            }
-         }
-         if (vscrollbar->handle(event)) {
+         if (vscrollbar->handle(event))
             verScrolling = 1;
-         }
       } else if (hscrollbar->visible() && Fl::event_inside(hscrollbar)) {
          if (hscrollbar->handle(event))
             horScrolling = 1;
@@ -354,9 +275,7 @@ int FltkViewport::handle (int event)
       break;
 
    case FL_DRAG:
-      if (Fl::event_inside(this))
-         Fl::remove_timeout(selectionScroll);
-      if (dragScrolling) {
+      if (dragScrolling && Fl::event_button() == FL_MIDDLE_MOUSE) {
          scroll(dragX - Fl::event_x(), dragY - Fl::event_y());
          dragX = Fl::event_x();
          dragY = Fl::event_y();
@@ -367,69 +286,37 @@ int FltkViewport::handle (int event)
       } else if (horScrolling) {
          hscrollbar->handle(event);
          return 1;
-      } else if (!Fl::event_inside(this)) {
-         mouse_x = Fl::event_x();
-         mouse_y = Fl::event_y();
-         if (!Fl::has_timeout(selectionScroll, this))
-            Fl::add_timeout(0.025, selectionScroll, this);
       }
       break;
 
    case FL_MOUSEWHEEL:
-      if ((vscrollbar->visible() && Fl::event_inside(vscrollbar)) ||
-            Fl::event_shift()) {
-         if (Fl::event_dy() > 0) {
-            scroll(core::SCREEN_DOWN_CMD);
-            return 1;
-         } else if (Fl::event_dy() < 0) {
-            scroll(core::SCREEN_UP_CMD);
-            return 1;
-         }
-      }
       return (Fl::event_dx() ? hscrollbar : vscrollbar)->handle(event);
       break;
 
    case FL_RELEASE:
-      Fl::remove_timeout(repeatPageScroll);
-      Fl::remove_timeout(selectionScroll);
       if (Fl::event_button() == FL_MIDDLE_MOUSE) {
          setCursor (core::style::CURSOR_DEFAULT);
       } else if (verScrolling) {
-         ret = vscrollbar->handle(event);
+         vscrollbar->handle(event);
       } else if (horScrolling) {
-         ret = hscrollbar->handle(event);
+         hscrollbar->handle(event);
       }
       horScrolling = verScrolling = dragScrolling = 0;
       break;
 
    case FL_ENTER:
-      if (vscrollbar->visible() && Fl::event_inside(vscrollbar))
-         return vscrollbar->handle(event);
-      if (hscrollbar->visible() && Fl::event_inside(hscrollbar))
-         return hscrollbar->handle(event);
       /* could be the result of, e.g., closing another window. */
       mouse_x = Fl::event_x();
       mouse_y = Fl::event_y();
       positionChanged();
       break;
 
-   case FL_MOVE:
-      /* Use LEAVE in order not to be over a link, etc., anymore. */
-      if (vscrollbar->visible() && Fl::event_inside(vscrollbar)) {
-         (void)FltkWidgetView::handle(FL_LEAVE);
-         return vscrollbar->handle(event);
-      }
-      if (hscrollbar->visible() && Fl::event_inside(hscrollbar)) {
-         (void)FltkWidgetView::handle(FL_LEAVE);
-         return hscrollbar->handle(event);
-      }
-      break;
    case FL_LEAVE:
       mouse_x = mouse_y = -1;
       break;
    }
 
-   return ret ? ret : FltkWidgetView::handle (event);
+   return FltkWidgetView::handle (event);
 }
 
 // ----------------------------------------------------------------------
@@ -445,8 +332,7 @@ void FltkViewport::setCanvasSize (int width, int ascent, int descent)
  */
 void FltkViewport::positionChanged ()
 {
-   if (!dragScrolling && mouse_x >= x() && mouse_x < x()+w() && mouse_y >= y()
-       && mouse_y < y()+h())
+   if (mouse_x != -1 && dragScrolling == false)
       (void)theLayout->motionNotify (this,
                                      translateViewXToCanvasX (mouse_x),
                                      translateViewYToCanvasY (mouse_y),
@@ -461,16 +347,6 @@ void FltkViewport::setScrollStep(int step)
 {
    vscrollbar->linesize(step);
    hscrollbar->linesize(step);
-}
-
-void FltkViewport::setPageOverlap(int overlap)
-{
-   pageOverlap = overlap;
-}
-
-void FltkViewport::setScrollbarPageMode(bool enable)
-{
-   scrollbarPageMode = enable;
 }
 
 bool FltkViewport::usesViewport ()
@@ -493,18 +369,18 @@ void FltkViewport::scrollTo (int x, int y)
    int hdiff = vscrollbar->visible () ? SCROLLBAR_THICKNESS : 0;
    int vdiff = hscrollbar->visible () ? SCROLLBAR_THICKNESS : 0;
 
-   x = misc::min (x, canvasWidth - w() + hdiff);
-   x = misc::max (x, 0);
+   x = misc::min<int> (x, canvasWidth - w() + hdiff);
+   x = misc::max<int> (x, 0);
 
-   y = misc::min (y, canvasHeight - h() + vdiff);
-   y = misc::max (y, 0);
+   y = misc::min<int> (y, canvasHeight - h() + vdiff);
+   y = misc::max<int> (y, 0);
 
    if (x == scrollX && y == scrollY) {
       return;
    }
 
    /* multiple calls to scroll can happen before a redraw occurs.
-    * scrollDX and scrollDY can therefore be non-zero here.
+    * scrollDX / scrollDY can therefore be non-zero here.
     */
    updateCanvasWidgets (x - scrollX, y - scrollY);
    scrollDX += x - scrollX;
@@ -526,73 +402,23 @@ void FltkViewport::scroll (int dx, int dy)
 
 void FltkViewport::scroll (core::ScrollCommand cmd)
 {
-   int hdiff = vscrollbar->visible () ? SCROLLBAR_THICKNESS : 0;
-   int vdiff = hscrollbar->visible () ? SCROLLBAR_THICKNESS : 0;
    if (cmd == core::SCREEN_UP_CMD) {
-      scroll (0, -h () + pageOverlap + vdiff);
+      scroll (0, -h () + vscrollbar->linesize ());
    } else if (cmd == core::SCREEN_DOWN_CMD) {
-      scroll (0, h () - pageOverlap - vdiff);
-   } else if (cmd == core::SCREEN_LEFT_CMD) {
-      scroll (-w() + pageOverlap + hdiff, 0);
-   } else if (cmd == core::SCREEN_RIGHT_CMD) {
-      scroll (w() - pageOverlap - hdiff, 0);
+      scroll (0, h () - vscrollbar->linesize ());
    } else if (cmd == core::LINE_UP_CMD) {
-      scroll (0, -vscrollbar->linesize ());
+      scroll (0, (int) -vscrollbar->linesize ());
    } else if (cmd == core::LINE_DOWN_CMD) {
-      scroll (0, vscrollbar->linesize ());
+      scroll (0, (int) vscrollbar->linesize ());
    } else if (cmd == core::LEFT_CMD) {
-      scroll (-hscrollbar->linesize (), 0);
+      scroll ((int) -hscrollbar->linesize (), 0);
    } else if (cmd == core::RIGHT_CMD) {
-      scroll (hscrollbar->linesize (), 0);
+      scroll ((int) hscrollbar->linesize (), 0);
    } else if (cmd == core::TOP_CMD) {
       scrollTo (scrollX, 0);
    } else if (cmd == core::BOTTOM_CMD) {
       scrollTo (scrollX, canvasHeight); /* gets adjusted in scrollTo () */
    }
-}
-
-/*
- * Scrolling in response to selection where the cursor is outside the view.
- */
-void FltkViewport::selectionScroll ()
-{
-   int distance;
-   int dx = 0, dy = 0;
-
-   if ((distance = x() - mouse_x) > 0)
-      dx = -distance * hscrollbar->linesize () / 48 - 1;
-   else if ((distance = mouse_x - (x() + w())) > 0)
-      dx = distance * hscrollbar->linesize () / 48 + 1;
-   if ((distance = y() - mouse_y) > 0)
-      dy = -distance * vscrollbar->linesize () / 48 - 1;
-   else if ((distance = mouse_y - (y() + h())) > 0)
-      dy = distance * vscrollbar->linesize () / 48 + 1;
-
-   scroll (dx, dy);
-}
-
-void FltkViewport::selectionScroll (void *data)
-{
-   ((FltkViewport *)data)->selectionScroll ();
-   Fl::repeat_timeout(0.025, selectionScroll, data);
-}
-
-void FltkViewport::repeatPageScroll ()
-{
-   scroll(pageScrolling);
-   Fl::repeat_timeout(pageScrollInterval, repeatPageScroll, this);
-}
-
-void FltkViewport::repeatPageScroll (void *data)
-{
-   ((FltkViewport *)data)->repeatPageScroll ();
-}
-
-void FltkViewport::setScrollbarOnLeft (bool enable)
-{
-   scrollbarOnLeft = enable ? 1 : 0;
-   adjustScrollbarsAndGadgetsAllocation();
-   damage(FL_DAMAGE_ALL);
 }
 
 void FltkViewport::setViewportSize (int width, int height,

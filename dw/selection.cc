@@ -20,7 +20,6 @@
 
 
 #include "core.hh"
-#include "../lout/debug.hh"
 
 #include <string.h>
 
@@ -46,8 +45,6 @@ namespace core {
 
 SelectionState::SelectionState ()
 {
-   DBG_OBJ_CREATE ("dw::core::SelectionState");
-
    layout = NULL;
 
    selectionState = NONE;
@@ -61,7 +58,6 @@ SelectionState::SelectionState ()
 SelectionState::~SelectionState ()
 {
    reset ();
-   DBG_OBJ_DELETE ();
 }
 
 void SelectionState::reset ()
@@ -93,79 +89,63 @@ void SelectionState::resetLink ()
 bool SelectionState::buttonPress (Iterator *it, int charPos, int linkNo,
                                   EventButton *event)
 {
-   DBG_IF_RTFL {
-      misc::StringBuffer sb;
-      it->intoStringBuffer (&sb);
-      DBG_OBJ_ENTER ("events", 0, "buttonPress", "[%s], %d, %d, ...",
-                     sb.getChars (), charPos, linkNo);
-   }
-
    Widget *itWidget = it->getWidget ();
    bool ret = false;
 
-   if (event) {
-      if (event->button == 3) {
-         // menu popup
-         layout->emitLinkPress (itWidget, linkNo, -1, -1, -1, event);
-         ret = true;
-      } else if (linkNo != -1) {
-         // link handling
-         (void) layout->emitLinkPress (itWidget, linkNo, -1, -1, -1, event);
-         resetLink ();
-         linkState = LINK_PRESSED;
-         linkButton = event->button;
-         DeepIterator *newLink = new DeepIterator (it);
-         if (newLink->isEmpty ()) {
-            delete newLink;
-            resetLink ();
-         } else {
-            link = newLink;
-            // It may be that the user has pressed on something activatable
-            // (linkNo != -1), but there is no contents, e.g. with images
-            // without ALTernative text.
-            if (link) {
-               linkChar = correctCharPos (link, charPos);
-               linkNumber = linkNo;
-            }
-         }
-         // We do not return the value of the signal method,
-         // but we do actually process this event.
-         ret = true;
-      } else if (event->button == 1) {
-         // normal selection handling
-         highlight (false, 0);
-         resetSelection ();
+   if (!event) return ret;
 
-         selectionState = SELECTING;
-         DeepIterator *newFrom = new DeepIterator (it);
-         if (newFrom->isEmpty ()) {
-            delete newFrom;
-            resetSelection ();
-         } else {
-            from = newFrom;
-            fromChar = correctCharPos (from, charPos);
-            to = from->cloneDeepIterator ();
-            toChar = correctCharPos (to, charPos);
+   if (event->button == 3) {
+      // menu popup
+      layout->emitLinkPress (itWidget, linkNo, -1, -1, -1, event);
+      ret = true;
+   } else if (linkNo != -1) {
+      // link handling
+      (void) layout->emitLinkPress (itWidget, linkNo, -1, -1, -1, event);
+      resetLink ();
+      linkState = LINK_PRESSED;
+      linkButton = event->button;
+      DeepIterator *newLink = new DeepIterator (it);
+      if (newLink->isEmpty ()) {
+         delete newLink;
+         resetLink ();
+      } else {
+         link = newLink;
+         // It may be that the user has pressed on something activatable
+         // (linkNo != -1), but there is no contents, e.g. with images
+         // without ALTernative text.
+         if (link) {
+            linkChar = correctCharPos (link, charPos);
+            linkNumber = linkNo;
          }
-         ret = true;
       }
+      // We do not return the value of the signal method,
+      // but we do actually process this event.
+      ret = true;
+   } else if (event->button == 1) {
+      // normal selection handling
+      highlight (false, 0);
+      resetSelection ();
+
+      selectionState = SELECTING;
+      DeepIterator *newFrom = new DeepIterator (it);
+      if (newFrom->isEmpty ()) {
+         delete newFrom;
+         resetSelection ();
+      } else {
+         from = newFrom;
+         fromChar = correctCharPos (from, charPos);
+         to = from->cloneDeepIterator ();
+         toChar = correctCharPos (to, charPos);
+      }
+      ret = true;
    }
 
-   DBG_OBJ_MSGF ("events", 1, "=> %s", ret ? "true" : "false");
-   DBG_OBJ_LEAVE ();
    return ret;
 }
 
 bool SelectionState::buttonRelease (Iterator *it, int charPos, int linkNo,
                                     EventButton *event)
 {
-   DBG_IF_RTFL {
-      misc::StringBuffer sb;
-      it->intoStringBuffer (&sb);
-      DBG_OBJ_ENTER ("events", 0, "buttonRelease", "[%s], %d, %d, ...",
-                     sb.getChars (), charPos, linkNo);
-   }
-
    Widget *itWidget = it->getWidget ();
    bool ret = false;
 
@@ -202,8 +182,6 @@ bool SelectionState::buttonRelease (Iterator *it, int charPos, int linkNo,
       }
    }
 
-   DBG_OBJ_MSGF ("events", 1, "=> %s", ret ? "true" : "false");
-   DBG_OBJ_LEAVE ();
    return ret;
 }
 
@@ -366,8 +344,8 @@ int SelectionState::correctCharPos (DeepIterator *it, int charPos)
    return misc::min(charPos, len);
 }
 
-void SelectionState::highlight0 (bool fl, DeepIterator *from, int fromChar,
-                                 DeepIterator *to, int toChar, int dir)
+void  SelectionState::highlight0 (bool fl, DeepIterator *from, int fromChar,
+                                  DeepIterator *to, int toChar, int dir)
 {
    DeepIterator *a, *b, *i;
    int cmp, aChar, bChar;
@@ -498,5 +476,5 @@ void SelectionState::copy()
    }
 }
 
-} // namespace core
 } // namespace dw
+} // namespace core

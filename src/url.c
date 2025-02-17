@@ -2,7 +2,6 @@
  * File: url.c
  *
  * Copyright (C) 2001-2009 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -10,7 +9,7 @@
  * (at your option) any later version.
  */
 
-/** @file
+/*
  * Parse and normalize all URL's inside Dillo.
  *  - <scheme> <authority> <path> <query> and <fragment> point to 'buffer'.
  *  - 'url_string' is built upon demand (transparent to the caller).
@@ -38,7 +37,7 @@
  *  abs_path    = "/" path_segments
  *
  *  Notes:
- *    - "undefined" means "preceding separator does not appear".
+ *    - "undefined" means "preceeding separator does not appear".
  *    - path is never "undefined" though it may be "empty".
  */
 
@@ -47,9 +46,8 @@
 #include <ctype.h>
 
 #include "url.h"
-#include "hsts.h"
-#include "misc.h"
 #include "msg.h"
+#include "file.h"  /* for HAVE_DRIVE_LETTERS */
 
 static const char *HEX = "0123456789ABCDEF";
 
@@ -57,9 +55,9 @@ static const char *HEX = "0123456789ABCDEF";
 #define URL_STR_FIELD_CMP(s1,s2) \
    (s1) && (s2) ? strcmp(s1,s2) : !(s1) && !(s2) ? 0 : (s1) ? 1 : -1
 #define URL_STR_FIELD_I_CMP(s1,s2) \
-   (s1) && (s2) ? dStrAsciiCasecmp(s1,s2) : !(s1) && !(s2) ? 0 : (s1) ? 1 : -1
+   (s1) && (s2) ? dStrcasecmp(s1,s2) : !(s1) && !(s2) ? 0 : (s1) ? 1 : -1
 
-/**
+/*
  * Return the url as a string.
  * (initializing 'url_string' field if necessary)
  */
@@ -90,7 +88,7 @@ char *a_Url_str(const DilloUrl *u)
    return url->url_string->str;
 }
 
-/**
+/*
  * Return the hostname as a string.
  * (initializing 'hostname' and 'port' fields if necessary)
  * Note: a similar approach can be taken for user:password auth.
@@ -121,16 +119,10 @@ const char *a_Url_hostname(const DilloUrl *u)
       }
    }
 
-   if (!url->port) {
-      if (!dStrAsciiCasecmp(url->scheme, "http"))
-         url->port = URL_HTTP_PORT;
-      else if (!dStrAsciiCasecmp(url->scheme, "https"))
-         url->port = URL_HTTPS_PORT;
-   }
    return url->hostname;
 }
 
-/**
+/*
  *  Create a DilloUrl object and initialize it.
  *  (buffer, scheme, authority, path, query and fragment).
  */
@@ -143,17 +135,10 @@ static DilloUrl *Url_object_new(const char *uri_str)
 
    url = dNew0(DilloUrl, 1);
 
-   /* url->buffer is given a little extra room in case HSTS needs to transform
-    * a URL string ending in ":80" to ":443".
-    */
-   int len = strlen(uri_str)+2;
-   s = dNew(char, len);
-   memcpy(s, uri_str, len-1);
-   s = dStrstrip(s);
-
    /* remove leading & trailing space from buffer */
-   url->buffer = s;
+   url->buffer = dStrstrip(dStrdup(uri_str));
 
+   s = (char *) url->buffer;
    p = strpbrk(s, ":/?#");
    if (p && p[0] == ':' && p > s) {                /* scheme */
       *p = 0;
@@ -201,8 +186,8 @@ static DilloUrl *Url_object_new(const char *uri_str)
    return url;
 }
 
-/**
- *  Free a DilloUrl.
+/*
+ *  Free a DilloUrl
  *  Do nothing if the argument is NULL
  */
 void a_Url_free(DilloUrl *url)
@@ -214,14 +199,16 @@ void a_Url_free(DilloUrl *url)
          dFree((char *)url->hostname);
       dFree((char *)url->buffer);
       dStr_free(url->data, 1);
+      dFree((char *)url->alt);
       dFree(url);
    }
 }
 
-/**
+/*
  * Resolve the URL as RFC3986 suggests.
  */
 static Dstr *Url_resolve_relative(const char *RelStr,
+                                  DilloUrl *BaseUrlPar,
                                   const char *BaseStr)
 {
    char *p, *s, *e;
@@ -232,7 +219,9 @@ static Dstr *Url_resolve_relative(const char *RelStr,
    /* parse relative URL */
    RelUrl = Url_object_new(RelStr);
 
-   if (RelUrl->scheme == NULL) {
+   if (BaseUrlPar) {
+      BaseUrl = BaseUrlPar;
+   } else if (RelUrl->scheme == NULL) {
       /* only required when there's no <scheme> in RelStr */
       BaseUrl = Url_object_new(BaseStr);
    }
@@ -275,7 +264,7 @@ static Dstr *Url_resolve_relative(const char *RelStr,
       } else if (BaseUrl->path) {                     /* relative path */
          dStr_append(Path, BaseUrl->path);
          for (i = Path->len; --i >= 0 && Path->str[i] != '/'; ) ;
-         if (i >= 0 && Path->str[i] == '/')
+         if (Path->str[i] == '/')
             dStr_truncate(Path, ++i);
       }
       if (RelUrl->path)
@@ -342,15 +331,15 @@ static Dstr *Url_resolve_relative(const char *RelStr,
 done:
    dStr_free(Path, TRUE);
    a_Url_free(RelUrl);
-   a_Url_free(BaseUrl);
+   if (BaseUrl != BaseUrlPar)
+      a_Url_free(BaseUrl);
    return SolvedUrl;
 }
 
-/**
+/*
  *  Transform (and resolve) an URL string into the respective DilloURL.
  *  If URL  =  "http://dillo.sf.net:8080/index.html?long#part2"
  *  then the resulting DilloURL should be:
- *  @code
  *  DilloURL = {
  *     url_string         = "http://dillo.sf.net:8080/index.html?long#part2"
  *     scheme             = "http"
@@ -362,45 +351,61 @@ done:
  *     port               = 8080
  *     flags              = URL_Get
  *     data               = Dstr * ("")
+ *     alt                = NULL
  *     ismap_url_len      = 0
  *  }
- *  @endcode
  *
  *  Return NULL if URL is badly formed.
  */
-DilloUrl* a_Url_new(const char *url_str, const char *base_url)
+DilloUrl* a_Url_new(const char *url_str_, const char *base_url)
 {
    DilloUrl *url;
-   char *urlstr = (char *)url_str;  /* auxiliary variable, don't free */
+   char *url_str = (char *)url_str_;
+   char *urlstr = url_str;  /* auxiliar variable, don't free */
    char *p, *str1 = NULL, *str2 = NULL;
    Dstr *SolvedUrl;
    int i, n_ic, n_ic_spc;
 
-   if (!url_str)
-      return NULL;
+   dReturn_val_if_fail (url_str != NULL, NULL);
 
-   /* Empty URL without base_url is not valid.
-    * They are used for action="" in forms with base_url set. */
-   if (url_str[0] == '\0' && base_url == NULL)
-      return NULL;
+#ifdef HAVE_DRIVE_LETTERS
+   /* A single-letter scheme is probably supposed to be a drive letter */
+   if (strlen(url_str) >= 2 && isalpha(url_str[0]) && url_str[1] == ':') {
+      url_str = dStrconcat("file:/", url_str_, NULL);
+      urlstr = url_str;
+   }
 
-   /* Count illegal characters (0x00-0x1F, 0x7F-0xFF and space) */
+   if (!dStrncasecmp(url_str, "file:", 5)) {
+      /* Substitute '|' for the drive letter separator (this is a
+       * reserved character, so it won't appear in normal filenames) */
+      if ((p = strchr(url_str + 5, ':')) != NULL) {
+         *p = '|';
+         *(p-1) = toupper(*(p-1));  /* always capitalize drive letters */
+      }
+
+      /* Replace backslashes with forward slashes in URLs */
+      for (p = url_str; *p; p++)
+         *p = (*p == '\\') ? '/' : *p;
+   }
+#endif /* HAVE_DRIVE_LETTERS */
+
+   /* Count illegal characters (0x00-0x1F, 0x7F and space) */
    n_ic = n_ic_spc = 0;
    for (p = (char*)url_str; *p; p++) {
       n_ic_spc += (*p == ' ') ? 1 : 0;
-      n_ic += (*p != ' ' && *p > 0x1F && *p < 0x7F) ? 0 : 1;
+      n_ic += (*p != ' ' && *p > 0x1F && *p != 0x7F) ? 0 : 1;
    }
    if (n_ic) {
       /* Encode illegal characters (they could also be stripped).
        * There's no standard for illegal chars; we chose to encode. */
       p = str1 = dNew(char, strlen(url_str) + 2*n_ic + 1);
       for (i = 0; url_str[i]; ++i)
-         if (url_str[i] > 0x1F && url_str[i] < 0x7F && url_str[i] != ' ')
+         if (url_str[i] > 0x1F && url_str[i] != 0x7F && url_str[i] != ' ')
             *p++ = url_str[i];
-         else {
-            *p++ = '%';
-            *p++ = HEX[(url_str[i] >> 4) & 15];
-            *p++ = HEX[url_str[i] & 15];
+         else  {
+           *p++ = '%';
+           *p++ = HEX[(url_str[i] >> 4) & 15];
+           *p++ = HEX[url_str[i] & 15];
          }
       *p = 0;
       urlstr = str1;
@@ -418,7 +423,7 @@ DilloUrl* a_Url_new(const char *url_str, const char *base_url)
    }
 
    /* Resolve the URL */
-   SolvedUrl = Url_resolve_relative(urlstr, base_url);
+   SolvedUrl = Url_resolve_relative(urlstr, NULL, base_url);
    _MSG("SolvedUrl = %s\n", SolvedUrl->str);
 
    /* Fill url data */
@@ -428,50 +433,19 @@ DilloUrl* a_Url_new(const char *url_str, const char *base_url)
    url->illegal_chars = n_ic;
    url->illegal_chars_spc = n_ic_spc;
 
+#ifdef HAVE_DRIVE_LETTERS
+   /* This looks like a mistake, but it is a deliberate memory optimization! */
+   if (url_str != url_str_)   /* Only free this value if it no longer points */
+      dFree(url_str);         /* to the same address as the original string. */
+#endif /* HAVE_DRIVE_LETTERS */
+
    dFree(str1);
    dFree(str2);
-
-   bool_t switch_to_https = FALSE;
-
-   if (url->scheme && !dStrAsciiCasecmp(url->scheme, "http")) {
-      /*
-       * A site's HTTP Strict Transport Security policy may direct us to transform
-       * URLs like "http://en.wikipedia.org:80" to "https://en.wikipedia.org:443".
-       */
-      if (prefs.http_strict_transport_security &&
-          a_Hsts_require_https(a_Url_hostname(url))) {
-         _MSG("url: HSTS transformation for %s.\n", url->url_string->str);
-         switch_to_https = TRUE;
-      } else if (prefs.http_force_https) {
-         _MSG("url: Force HTTPS transformation for %s.\n", url->url_string->str);
-         switch_to_https = TRUE;
-      }
-   }
-
-   if (switch_to_https) {
-      const char *const scheme = "https";
-
-      url->scheme = scheme;
-      if (url->port == URL_HTTP_PORT)
-         url->port = URL_HTTPS_PORT;
-
-      if (url->authority) {
-         int len = strlen(url->authority);
-
-         if (len >= 3 && !strcmp(url->authority + len-3, ":80")) {
-            strcpy((char *)url->authority + len-2, "443");
-         }
-      }
-      
-      dStr_free(url->url_string, TRUE);
-      url->url_string = NULL;
-   }
-
    return url;
 }
 
 
-/**
+/*
  *  Duplicate a Url structure
  */
 DilloUrl* a_Url_dup(const DilloUrl *ori)
@@ -484,6 +458,7 @@ DilloUrl* a_Url_dup(const DilloUrl *ori)
    url->url_string           = dStr_new(URL_STR(ori));
    url->port                 = ori->port;
    url->flags                = ori->flags;
+   url->alt                  = dStrdup(ori->alt);
    url->ismap_url_len        = ori->ismap_url_len;
    url->illegal_chars        = ori->illegal_chars;
    url->illegal_chars_spc    = ori->illegal_chars_spc;
@@ -492,7 +467,7 @@ DilloUrl* a_Url_dup(const DilloUrl *ori)
    return url;
 }
 
-/**
+/*
  *  Compare two Url's to check if they're the same, or which one is bigger.
  *
  *  The fields which are compared here are:
@@ -521,7 +496,7 @@ int a_Url_cmp(const DilloUrl *A, const DilloUrl *B)
    return st;
 }
 
-/**
+/*
  * Set DilloUrl flags
  */
 void a_Url_set_flags(DilloUrl *u, int flags)
@@ -530,7 +505,7 @@ void a_Url_set_flags(DilloUrl *u, int flags)
       u->flags = flags;
 }
 
-/**
+/*
  * Set DilloUrl data (like POST info, etc.)
  */
 void a_Url_set_data(DilloUrl *u, Dstr **data)
@@ -542,8 +517,19 @@ void a_Url_set_data(DilloUrl *u, Dstr **data)
    }
 }
 
-/**
- * Set DilloUrl ismap coordinates.
+/*
+ * Set DilloUrl alt (alternate text to the URL. Used by image maps)
+ */
+void a_Url_set_alt(DilloUrl *u, const char *alt)
+{
+   if (u) {
+      dFree((char *)u->alt);
+      u->alt = dStrdup(alt);
+   }
+}
+
+/*
+ * Set DilloUrl ismap coordinates
  * (this is optimized for not hogging the CPU)
  */
 void a_Url_set_ismap_coords(DilloUrl *u, char *coord_str)
@@ -552,7 +538,8 @@ void a_Url_set_ismap_coords(DilloUrl *u, char *coord_str)
 
    if (!u->ismap_url_len) {
       /* Save base-url length (without coords) */
-      u->ismap_url_len = URL_STR_(u) ? u->url_string->len : 0;
+      u->ismap_url_len  = URL_STR_(u) ? u->url_string->len : 0;
+      a_Url_set_flags(u, URL_FLAGS(u) | URL_Ismap);
    }
    if (u->url_string) {
       dStr_truncate(u->url_string, u->ismap_url_len);
@@ -561,7 +548,7 @@ void a_Url_set_ismap_coords(DilloUrl *u, char *coord_str)
    }
 }
 
-/**
+/*
  * Given an hex octet (e.g., e3, 2F, 20), return the corresponding
  * character if the octet is valid, and -1 otherwise
  */
@@ -579,7 +566,7 @@ static int Url_decode_hex_octet(const char *s)
    return -1;
 }
 
-/**
+/*
  * Parse possible hexadecimal octets in the URI path.
  * Returns a new allocated string.
  */
@@ -607,8 +594,8 @@ char *a_Url_decode_hex_str(const char *str)
    return new_str;
 }
 
-/**
- * Urlencode 'str'.
+/*
+ * Urlencode 'str'
  * -RL :: According to the RFC 1738, only alphanumerics, the special
  *        characters "$-_.+!*'(),", and reserved characters ";/?:@=&" used
  *        for their *reserved purposes* may be used unencoded within a URL.
@@ -628,7 +615,8 @@ char *a_Url_encode_hex_str(const char *str)
    newstr = dNew(char, 6*strlen(str)+1);
 
    for (c = newstr; *str; str++)
-      if ((dIsalnum(*str) && d_isascii(*str)) || strchr(verbatim, *str))
+      if ((dIsalnum(*str) && !(*str & 0x80)) || strchr(verbatim, *str))
+      /* we really need isalnum for the "C" locale */
          *c++ = *str;
       else if (*str == ' ')
          *c++ = '+';
@@ -650,14 +638,22 @@ char *a_Url_encode_hex_str(const char *str)
 }
 
 
-/**
+/*
  * RFC-3986 suggests this stripping when "importing" URLs from other media.
  * Strip: "URL:", enclosing < >, and embedded whitespace.
- * (We also strip illegal chars: 00-1F and 7F-FF)
+ * (We also strip illegal chars: 00-1F and 7F)
  */
 char *a_Url_string_strip_delimiters(const char *str)
 {
+   int local_file = 0;
    char *p, *new_str, *text;
+
+   /* Don't disregard spaces in (well-formed) local filenames */
+#ifdef HAVE_DRIVE_LETTERS
+   local_file = (strlen(str) >= 2 && str[1] == ':') ? 1 : 0;
+#else
+   local_file = (strlen(str) >= 1 && str[0] == '/') ? 1 : 0;
+#endif
 
    new_str = text = dStrdup(str);
 
@@ -668,7 +664,7 @@ char *a_Url_string_strip_delimiters(const char *str)
          text++;
 
       for (p = new_str; *text; text++)
-         if (*text > 0x1F && *text < 0x7F && *text != ' ')
+         if (*text > 0x1F && *text != 0x7F && (local_file || *text != ' '))
             *p++ = *text;
       if (p > new_str && p[-1] == '>')
          --p;
@@ -677,31 +673,33 @@ char *a_Url_string_strip_delimiters(const char *str)
    return new_str;
 }
 
-/**
- * What type of host is this?
+/*
+ * Is the provided hostname an IP address?
  */
-int a_Url_host_type(const char *host)
+static bool_t Url_host_is_ip(const char *host)
 {
    uint_t len;
 
    if (!host || !*host)
-      return URL_HOST_ERROR;
+      return FALSE;
 
    len = strlen(host);
 
    if (len == strspn(host, "0123456789.")) {
-      return URL_HOST_IPV4;
+      _MSG("an IPv4 address\n");
+      return TRUE;
    }
-   if (strchr(host, ':') &&
-       (len == strspn(host, "0123456789abcdefABCDEF:."))) {
+   if (*host == '[' &&
+       (len == strspn(host, "0123456789abcdefABCDEF:.[]"))) {
       /* The precise format is shown in section 3.2.2 of rfc 3986 */
-      return URL_HOST_IPV6;
+      _MSG("an IPv6 address\n");
+      return TRUE;
    }
-   return URL_HOST_NAME;
+   return FALSE;
 }
 
-/**
- * How many internal dots are in the public portion of this hostname?.
+/*
+ * How many internal dots are in the public portion of this hostname?
  * e.g., for "www.dillo.org", it is one because everything under "dillo.org",
  * as a .org domain, is part of one organization.
  *
@@ -728,22 +726,20 @@ static uint_t Url_host_public_internal_dots(const char *host)
 
       if (tld_len > 0) {
          /* These TLDs were chosen by examining the current publicsuffix list
-          * in July 2016 and picking out those where it was simplest for
-          * them to describe the situation by beginning with a "*.[tld]" rule
-          * or every rule was "[something].[tld]".
-          *
-          * TODO: Consider the old publicsuffix code again. This TLD list has
-          * shrunk and shrunk over the years, and has become a poorer and
-          * poorer approximation of administrative boundaries.
+          * in January 2010 and picking out those where it was simplest for
+          * them to describe the situation by beginning with a "*.[tld]" rule.
           */
-         const char *const tlds[] = {"bd","bn","ck","cy","er","fj","fk",
-                                     "gu","jm","ke","kh","kw","mm","mz",
-                                     "ni","np","pg","ye","za","zw"};
+         const char *const tlds[] = {"ar","au","bd","bn","bt","ck","cy","do",
+                                     "eg","er","et","fj","fk","gt","gu","id",
+                                     "il","jm","ke","kh","kw","ml","mm","mt",
+                                     "mz","ni","np","nz","om","pg","py","qa",
+                                     "sv","tr","uk","uy","ve","ye","yu","za",
+                                     "zm","zw"};
          uint_t i, tld_num = sizeof(tlds) / sizeof(tlds[0]);
 
          for (i = 0; i < tld_num; i++) {
             if (strlen(tlds[i]) == (uint_t) tld_len &&
-                !dStrnAsciiCasecmp(tlds[i], host + start, tld_len)) {
+                !dStrncasecmp(tlds[i], host + start, tld_len)) {
                _MSG("TLD code matched %s\n", tlds[i]);
                ret++;
                break;
@@ -754,17 +750,17 @@ static uint_t Url_host_public_internal_dots(const char *host)
    return ret;
 }
 
-/**
- * Given a URL host string, return the portion that is public. i.e., the
+/*
+ * Given a URL host string, return the portion that is public, i.e., the
  * domain that is in a registry outside the organization.
  * For 'www.dillo.org', that would be 'dillo.org'.
  */
-static const char *Url_host_find_public_suffix(const char *host)
+const char *a_Url_host_find_public_suffix(const char *host)
 {
    const char *s;
    uint_t dots;
 
-   if (a_Url_host_type(host) != URL_HOST_NAME)
+   if (!host || !*host || Url_host_is_ip(host))
       return host;
 
    s = host;
@@ -793,14 +789,4 @@ static const char *Url_host_find_public_suffix(const char *host)
 
    _MSG("public suffix of %s is %s\n", host, s);
    return s;
-}
-
-bool_t a_Url_same_organization(const DilloUrl *u1, const DilloUrl *u2)
-{
-   if (!u1 || !u2)
-      return FALSE;
-
-   return dStrAsciiCasecmp(Url_host_find_public_suffix(URL_HOST(u1)),
-                           Url_host_find_public_suffix(URL_HOST(u2)))
-          ? FALSE : TRUE;
 }

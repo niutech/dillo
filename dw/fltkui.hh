@@ -15,23 +15,13 @@ namespace fltk {
 /**
  * \brief FLTK implementation of dw::core::ui.
  *
- * <div style="border: 2px solid #ff0000; margin-top: 0.5em;
- * margin-bottom: 0.5em; padding: 0.5em 1em;
- * background-color: #ffefe0"><b>Update:</b> The complicated design
- * results from my insufficient knowledge of C++ some years ago; since
- * then, I've learned how to deal with "diamond inheritance", as the
- * (ideal, not actually implemented) design in the first diagram
- * shows. It should be possible to implement this ideal design in a
- * straightforward way, and so get rid of templates. --SG</div>
- *
  * The design should be like this:
  *
  * \dot
  * digraph G {
  *    node [shape=record, fontname=Helvetica, fontsize=10];
- *    edge [arrowhead="none", arrowtail="empty", dir="both",
- *          labelfontname=Helvetica, labelfontsize=10, color="#404040",
- *          labelfontcolor="#000080"];
+ *    edge [arrowhead="none", arrowtail="empty", labelfontname=Helvetica,
+ *          labelfontsize=10, color="#404040", labelfontcolor="#000080"];
  *    fontname=Helvetica; fontsize=10;
  *
  *    subgraph cluster_core {
@@ -67,7 +57,7 @@ namespace fltk {
  *
  * <center>[\ref uml-legend "legend"]</center>
  *
- * where dw::fltk::ui::FltkResource provides some base functionality for all
+ * where dw::fltk::ui::FltkResource provides some base funtionality for all
  * conctrete FLTK implementations of sub-interfaces of dw::core::ui::Resource.
  * However, this is not directly possible in C++, since the base class
  * dw::core::ui::Resource is ambiguous for
@@ -82,9 +72,8 @@ namespace fltk {
  * \dot
  * digraph G {
  *    node [shape=record, fontname=Helvetica, fontsize=10];
- *    edge [arrowhead="none", arrowtail="empty", dir="both",
- *          labelfontname=Helvetica, labelfontsize=10, color="#404040",
- *          labelfontcolor="#000080"];
+ *    edge [arrowhead="none", arrowtail="empty", labelfontname=Helvetica,
+ *          labelfontsize=10, color="#404040", labelfontcolor="#000080"];
  *    fontname=Helvetica; fontsize=10;
  *
  *    subgraph cluster_core {
@@ -124,9 +113,8 @@ namespace fltk {
  * \dot
  * digraph G {
  *    node [shape=record, fontname=Helvetica, fontsize=10];
- *    edge [arrowhead="none", arrowtail="empty", dir="both",
- *          labelfontname=Helvetica, labelfontsize=10, color="#404040",
- *          labelfontcolor="#000080"];
+ *    edge [arrowhead="none", arrowtail="empty", labelfontname=Helvetica,
+ *          labelfontsize=10, color="#404040", labelfontcolor="#000080"];
  *    fontname=Helvetica; fontsize=10;
  *
  *    subgraph cluster_core {
@@ -162,12 +150,10 @@ namespace fltk {
  *    FltkResource -> FltkSpecificResource;
  *    FltkSpecificResource -> FltkSpecificResource_button [arrowhead="open",
  *                                                         arrowtail="none",
- *                                                         dir="both",
  *                                                         style="dashed",
  *                                                         color="#808000"];
  *    FltkSpecificResource -> FltkSpecificResource_entry [arrowhead="open",
  *                                                        arrowtail="none",
- *                                                        dir="both",
  *                                                        style="dashed",
  *                                                        color="#808000"];
  *    LabelButtonResource -> FltkSpecificResource_button;
@@ -211,8 +197,7 @@ public:
    virtual void detachView (FltkView *view);
 
    void sizeAllocate (core::Allocation *allocation);
-   void draw (core::View *view, core::Rectangle *area,
-              core::DrawingContext *context);
+   void draw (core::View *view, core::Rectangle *area);
 
    void setStyle (core::style::Style *style);
 
@@ -224,12 +209,11 @@ public:
 template <class I> class FltkSpecificResource: public I, public FltkResource
 {
 public:
-   FltkSpecificResource (FltkPlatform *platform);
-   ~FltkSpecificResource ();
+   inline FltkSpecificResource (FltkPlatform *platform) :
+      FltkResource (platform) { }
 
    void sizeAllocate (core::Allocation *allocation);
-   void draw (core::View *view, core::Rectangle *area,
-              core::DrawingContext *context);
+   void draw (core::View *view, core::Rectangle *area);
    void setStyle (core::style::Style *style);
 
    bool isEnabled ();
@@ -298,12 +282,11 @@ class FltkEntryResource:
    public FltkSpecificResource <dw::core::ui::EntryResource>
 {
 private:
-   int size;
+   int maxLength;
    bool password;
    const char *initText;
    char *label;
    int label_w;
-   char *placeholder;
    bool editable;
 
    static void widgetCallback (Fl_Widget *widget, void *data);
@@ -314,8 +297,8 @@ protected:
    void setWidgetStyle (Fl_Widget *widget, core::style::Style *style);
 
 public:
-   FltkEntryResource (FltkPlatform *platform, int size, bool password,
-                      const char *label, const char *placeholder);
+   FltkEntryResource (FltkPlatform *platform, int maxLength, bool password,
+                      const char *label);
    ~FltkEntryResource ();
 
    void sizeRequest (core::Requisition *requisition);
@@ -325,7 +308,6 @@ public:
    void setText (const char *text);
    bool isEditable ();
    void setEditable (bool editable);
-   void setMaxLength (int maxlen);
 };
 
 
@@ -333,16 +315,17 @@ class FltkMultiLineTextResource:
    public FltkSpecificResource <dw::core::ui::MultiLineTextResource>
 {
 private:
+   Fl_Text_Buffer *buffer;
+   char *text_copy;
    bool editable;
    int numCols, numRows;
-   char *placeholder;
+
 protected:
    Fl_Widget *createNewWidget (core::Allocation *allocation);
    void setWidgetStyle (Fl_Widget *widget, core::style::Style *style);
 
 public:
-   FltkMultiLineTextResource (FltkPlatform *platform, int cols, int rows,
-                              const char *placeholder);
+   FltkMultiLineTextResource (FltkPlatform *platform, int cols, int rows);
    ~FltkMultiLineTextResource ();
 
    void sizeRequest (core::Requisition *requisition);
@@ -462,7 +445,6 @@ template <class I> class FltkSelectionResource:
 protected:
    virtual bool setSelectedItems() { return false; }
    virtual void addItem (const char *str, bool enabled, bool selected) = 0;
-   virtual void setItem (int index, bool selected) = 0;
    virtual void pushGroup (const char *name, bool enabled) = 0;
    virtual void popGroup () = 0;
 public:
@@ -487,12 +469,12 @@ private:
    Fl_Menu_Item *newItem();
    Fl_Menu_Item *menu;
    int itemsAllocated, itemsUsed;
+   int visibleItems; /* not counting the invisible ones that close a group */
 public:
    FltkOptionMenuResource (FltkPlatform *platform);
    ~FltkOptionMenuResource ();
 
    void addItem (const char *str, bool enabled, bool selected);
-   void setItem (int index, bool selected);
    void pushGroup (const char *name, bool enabled);
    void popGroup ();
 
@@ -506,13 +488,15 @@ class FltkListResource:
 protected:
    Fl_Widget *createNewWidget (core::Allocation *allocation);
    void setWidgetStyle (Fl_Widget *widget, core::style::Style *style);
-   int getNumberOfItems();
+
+   int getNumberOfItems () {return itemsSelected.size();};
    int getMaxItemWidth ();
+
 private:
    static void widgetCallback (Fl_Widget *widget, void *data);
    void *newItem (const char *str, bool enabled, bool selected);
-   int currDepth;
-   int colWidths[4];
+   void *currParent;
+   lout::misc::SimpleVector <bool> itemsSelected;
    int showRows;
    ListResource::SelectionMode mode;
 public:
@@ -522,7 +506,6 @@ public:
    ~FltkListResource ();
 
    void addItem (const char *str, bool enabled, bool selected);
-   void setItem (int index, bool selected);
    void pushGroup (const char *name, bool enabled);
    void popGroup ();
 

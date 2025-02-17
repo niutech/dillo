@@ -1,19 +1,14 @@
 #ifndef __DW_TABLE_HH__
 #define __DW_TABLE_HH__
 
-#include "oofawarewidget.hh"
-#include "alignedtablecell.hh"
+#include "core.hh"
+#include "tablecell.hh"
 #include "../lout/misc.hh"
 
 namespace dw {
 
 /**
  * \brief A Widget for rendering tables.
- *
- * <div style="border: 2px solid #ff0000; margin-top: 0.5em;
- * margin-bottom: 0.5em; padding: 0.5em 1em;
- * background-color: #ffefe0"><b>Warning:</b> Some parts of this
- * description are outdated since \ref dw-grows.</div>
  *
  * <h3>Introduction</h3>
  *
@@ -43,44 +38,41 @@ namespace dw {
  *    sizeRequestImpl [color="#0000ff", URL="\ref dw::Table::sizeRequestImpl"];
  *    sizeAllocateImpl [color="#0000ff",
  *                      URL="\ref dw::Table::sizeAllocateImpl"];
- *    getExtremes [color="#0000ff", URL="\ref dw::core::Widget::getExtremes"];
  *    getExtremesImpl [color="#0000ff", URL="\ref dw::Table::getExtremesImpl"];
  *
- *    calcCellSizes [label="calcCellSizes (calcHeights = true)",
- *                   URL="\ref dw::Table::calcCellSizes"];
- *    forceCalcCellSizes [label="forceCalcCellSizes (calcHeights = true)",
- *                        URL="\ref dw::Table::forceCalcCellSizes"];
- *    actuallyCalcCellSizes[label="actuallyCalcCellSizes (calcHeights = true)",
- *                          URL="\ref dw::Table::actuallyCalcCellSizes"];
- *    forceCalcColumnExtremes[URL="\ref dw::Table::forceCalcColumnExtremes"];
+ *    subgraph cluster_sizes {
+ *       style="dashed"; color="#8080c0";
+ *       calcCellSizes [URL="\ref dw::Table::calcCellSizes"];
+ *       forceCalcCellSizes [URL="\ref dw::Table::forceCalcCellSizes"];
+ *    }
+ *
+ *    subgraph cluster_extremes {
+ *       style="dashed"; color="#8080c0";
+ *       calcColumnExtremes [URL="\ref dw::Table::calcColumnExtremes"];
+ *      forceCalcColumnExtremes[URL="\ref dw::Table::forceCalcColumnExtremes"];
+ *    }
  *
  *    sizeRequestImpl -> forceCalcCellSizes [label="[B]"];
  *    sizeAllocateImpl -> calcCellSizes [label="[A]"];
  *    getExtremesImpl -> forceCalcColumnExtremes [label="[B]"];
  *
- *    forceCalcCellSizes -> actuallyCalcCellSizes;
- *    actuallyCalcCellSizes-> getExtremes;
- *    getExtremes -> getExtremesImpl [style="dashed", label="[C]"];
+ *    forceCalcCellSizes -> calcColumnExtremes;
  *
  *    calcCellSizes -> forceCalcCellSizes [style="dashed", label="[C]"];
+ *    calcColumnExtremes -> forceCalcColumnExtremes [style="dashed",
+ *                                                   label="[C]"];
  * }
  * \enddot
  *
  * [A] In this case, the new calculation is \em not forced, but only
  * done, when necessary.
  *
- * [B] In this case, the new calculation is always necessary, since [C]
+ * [B] In this case, the new calculation is allways necessary, since [C]
  * is the case.
  *
  * [C] Whether this function is called, depends on NEEDS_RESIZE /
- * RESIZE_QUEUED / EXTREMES_CHANGED / EXTREMES_QUEUED.
+ * EXTREMES_CHANGED.
  *
- * **TODO:**
- *
- * - Are <tt>*[cC]alcCellSizes (calcHeights = *false*)</tt> not
- *   necessary anymore?
- * - Calculating available sizes (Table::getAvailWidthOfChild) should
- *   be documented in this diagram, too.
  *
  * <h4>Apportionment</h4>
  *
@@ -126,8 +118,10 @@ namespace dw {
  *
  * <ol>
  * <li> First, only cells with colspan = 1 are regarded:
+ *
  *      \f[ e_{\hbox{base},i,\min} = \max \{ e_{\hbox{cell},i,j,\min} \} \f]
  *      \f[ e_{\hbox{base},i,\max} = \max \{ e_{\hbox{cell},i,j,\max} \} \f]
+ *
  *      only for cells \f$(i, j)\f$ with colspan = 1.
  *
  * <li> Then,
@@ -136,22 +130,29 @@ namespace dw {
  *      the cell at \f$(i_1, j)\f$ always span from \f$i_1\f$ to \f$i_2\f$.)
  *      If the minimal width of the column exceeds the sum of the column minima
  *      calculated in the last step:
+ *
  *      \f[e_{\hbox{cell},i_1,j,\min} >
  *         \sum_{i=i_1}^{i=i_2} e_{\hbox{base},i,\min}\f]
+ *
  *      then the minimal width of this cell is apportioned to the columns:
  *
  *      <ul>
  *      <li> If the minimal width of this cell also exceeds the sum of the
  *           column maxima:
+ *
  *        \f[e_{\hbox{cell},i_1,j,\min} >
  *           \sum_{i=i_1}^{i=i_2} e_{\hbox{base},i,\max}\f]
+ *
  *           then \f$e_{\hbox{cell},i_1,j,\min}\f$ is apportioned in a simple
  *           way:
+ *
  *        \f[e_{\hbox{span},i,j,\min} =
  *              e_{\hbox{base},i,\max}
  *                 {e_{\hbox{span},i,j,\min} \over
  *                  \sum_{i=i_1}^{i=i_2} e_{\hbox{base},i,\max}}\f]
+ *
  *      <li> Otherwise, the apportionment function is used:
+ *
  *        \f[e_{\hbox{span},i,j,\min} =
  *           a_i (e_{\hbox{cell},i_1,j,\min},
  *                (e_{\hbox{cell},i_1,j,\min} \ldots
@@ -171,7 +172,6 @@ namespace dw {
  *      For the maxima, there is no \f$e_{\hbox{span},i,\max}\f$, but it has to
  *      be assured, that the maximum is always greater than or equal to the
  *      minimum.
- *
  * </ol>
  *
  * Generally, if absolute widths are specified, they are, instead of the
@@ -199,9 +199,8 @@ namespace dw {
  *
  * <ul>
  * <li> the specified absolute width of the table, when given, or
- * <li> the available width (set by dw::Table::setWidth [TODO outdated]) times
- *      the specified percentage width of t(at max 100%), if the latter is
- *      given, or
+ * <li> the available width (set by dw::Table::setWidth) times the specified
+ *      percentage width of t(at max 100%), if the latter is given, or
  * <li> otherwise the available width.
  * </ul>
  *
@@ -224,13 +223,17 @@ namespace dw {
  *      no percentage width has been specified. The difference to the total
  *      width is at max available to the columns with percentage width
  *      specifications:
+ *
  *      \f[W_{\hbox{columns}_\%,\hbox{available}} = W - \sum e_{i,\min}\f]
+ *
  *      with only those columns \f$i\f$ with no percentage width specification.
  *
  * <li> Then, calculate the sum of the widths, which the columns with
  *      percentage width specification would allocate, when fully adhering to
  *      them:
+ *
  *      \f[W_{\hbox{columns}_\%,\hbox{best}} = W \sum w_{i,\%}\f]
+ *
  *      with only those columns \f$i\f$ with a percentage width specification.
  *
  * <li> Two cases are distinguished:
@@ -240,19 +243,25 @@ namespace dw {
  *             W_{\hbox{columns}_\%,\hbox{best}}\f$: In this case, the
  *           percentage widths can be used without any modification, by
  *           setting the extremes:
+ *
  *           \f[e_{i,\min} = e_{i,\max} = W w_{i,\%}\f]
+ *
  *           for only those columns \f$i\f$ with a percentage width
  *           specification.
  *
  *      <li> \f$W_{\hbox{columns}_\%,\hbox{available}} <
  *             W_{\hbox{columns}_\%,\hbox{best}}\f$: In this case, the widths
  *           for these columns must be cut down:
+ *
  *           \f[e_{i,\min} = e_{i,\max} =
  *              w_{i,\%}
  *              {W_{\hbox{columns}_\%,\hbox{available}} \over
  *               w_{\hbox{total},\%}}\f]
+ *
  *           with
+ *
  *           \f[w_{\hbox{total},\%} = \sum w_{i,\%}\f]
+ *
  *           in both cases for only those columns \f$i\f$ with a percentage
  *           width specification.
  *      </ul>
@@ -322,16 +331,9 @@ namespace dw {
  * Here, \em foo-bar refers to the attribute \em bar of the tag \em foo foo.
  * Look at the HTML parser for more details.
  */
-class Table: public oof::OOFAwareWidget
+class Table: public core::Widget
 {
 private:
-   struct Cell {
-      core::Widget *widget;
-      int colspanOrig, colspanEff, rowspan;
-   };
-   struct SpanSpace {
-      int startCol, startRow;  // where the cell starts
-   };
 
    struct Child
    {
@@ -340,22 +342,30 @@ private:
          SPAN_SPACE  // part of a spanning cell
       } type;
       union {
-         struct Cell cell;
-         struct SpanSpace spanSpace;
+         struct {
+            core::Widget *widget;
+            int colspanOrig, colspanEff, rowspan;
+         } cell;
+         struct {
+            int startCol, startRow;  // where the cell starts
+         } spanSpace;
       };
    };
 
-   class TableIterator: public OOFAwareWidgetIterator
+   class TableIterator: public core::Iterator
    {
-   protected:
-      int numContentsInFlow ();
-      void getContentInFlow (int index, core::Content *content);
+   private:
+      int index;
 
    public:
       TableIterator (Table *table, core::Content::Type mask, bool atEnd);
+      TableIterator (Table *table, core::Content::Type mask, int index);
 
       lout::object::Object *clone();
+      int compareTo(lout::misc::Comparable *other);
 
+      bool next ();
+      bool prev ();
       void highlight (int start, int end, core::HighlightLayer layer);
       void unhighlight (int direction, core::HighlightLayer layer);
       void getAllocation (int start, int end, core::Allocation *allocation);
@@ -363,9 +373,8 @@ private:
 
    friend class TableIterator;
 
-   static bool adjustTableMinWidth;
-
    bool limitTextWidth, rowClosed;
+   int availWidth, availAscent, availDescent;  // set by set...
 
    int numRows, numCols, curRow, curCol;
    lout::misc::SimpleVector<Child*> *children;
@@ -376,28 +385,6 @@ private:
     * \brief The extremes of all columns.
     */
    lout::misc::SimpleVector<core::Extremes> *colExtremes;
-
-   /**
-    * \brief Whether the column itself (in the future?) or at least one
-    *    cell in this column or spanning over this column has CSS
-    *    'width' specified.
-    *
-    * Filled by forceCalcColumnExtremes(), since it is needed to
-    * calculate the column widths.
-    */
-   lout::misc::SimpleVector<bool> *colWidthSpecified;
-   int numColWidthSpecified;
-
-   /**
-    * \brief Whether the column itself (in the future?) or at least one
-    *    cell in this column or spanning over this column has CSS
-    *    'width' specified *as percentage value*.
-    *
-    * Filled by forceCalcColumnExtremes(), since it is needed to
-    * calculate the column widths.
-    */
-   lout::misc::SimpleVector<bool> *colWidthPercentage;
-   int numColWidthPercentage;
 
    /**
     * \brief The widths of all columns.
@@ -414,19 +401,21 @@ private:
     * If a Cell has rowspan > 1, it goes into this array
     */
    lout::misc::SimpleVector<int> *rowSpanCells;
+   /**
+    * If a Cell has colspan > 1, it goes into this array
+    */
+   lout::misc::SimpleVector<int> *colSpanCells;
    lout::misc::SimpleVector<int> *baseline;
 
    lout::misc::SimpleVector<core::style::Style*> *rowStyle;
 
-   bool colWidthsUpToDateWidthColExtremes;
-
-   enum ExtrMod { MIN, MIN_INTR, MIN_MIN, MAX_MIN, MAX, MAX_INTR, DATA };
-
-   const char *getExtrModName (ExtrMod mod);
-   int getExtreme (core::Extremes *extremes, ExtrMod mod);
-   void setExtreme (core::Extremes *extremes, ExtrMod mod, int value);
-   int getColExtreme (int col, ExtrMod mod, void *data);
-   inline void setColExtreme (int col, ExtrMod mod, void *data, int value);
+   /**
+    * hasColPercent becomes true when any cell specifies a percentage width.
+    * A negative value in colPercents means LEN_AUTO or LEN_ABS.
+    */
+   enum { LEN_AUTO = -1, LEN_ABS = -2};
+   int hasColPercent;
+   lout::misc::SimpleVector<float> *colPercents;
 
    inline bool childDefined(int n)
    {
@@ -434,56 +423,44 @@ private:
          children->get(n)->type != Child::SPAN_SPACE;
    }
 
-   int calcAvailWidthForDescendant (Widget *child);
-
    void reallocChildren (int newNumCols, int newNumRows);
 
-   void calcCellSizes (bool calcHeights);
-   void forceCalcCellSizes (bool calcHeights);
-   void actuallyCalcCellSizes (bool calcHeights);
+   void calcCellSizes ();
+   void forceCalcCellSizes ();
    void apportionRowSpan ();
 
+   void calcColumnExtremes ();
    void forceCalcColumnExtremes ();
-   void calcExtremesSpanMultiCols (int col, int cs,
-                                   core::Extremes *cellExtremes,
-                                   ExtrMod minExtrMod, ExtrMod maxExtrMod,
-                                   void *extrData);
-   void calcAdjustmentWidthSpanMultiCols (int col, int cs,
-                                          core::Extremes *cellExtremes);
 
-   void apportion2 (int totalWidth, int firstCol, int lastCol,
-                    ExtrMod minExtrMod, ExtrMod maxExtrMod, void *extrData,
-                    lout::misc::SimpleVector<int> *dest, int destOffset);
+   void apportion2 (int totalWidth, int forceTotalWidth);
+   void apportion_percentages2 (int totalWidth, int forceTotalWidth);
 
    void setCumHeight (int row, int value)
    {
       if (value != cumHeight->get (row)) {
-         redrawY = lout::misc::min ( redrawY, value );
+         redrawY = lout::misc::min<int> ( redrawY, value );
          cumHeight->set (row, value);
       }
    }
 
+   inline void setColWidth (int col, int value)
+   {
+      if (value != colWidths->get (col)) {
+         redrawX = lout::misc::min<int> (redrawX, value);
+         colWidths->set (col, value);
+      }
+   }
+
 protected:
-   void sizeRequestSimpl (core::Requisition *requisition);
-   void getExtremesSimpl (core::Extremes *extremes);
+   void sizeRequestImpl (core::Requisition *requisition);
+   void getExtremesImpl (core::Extremes *extremes);
    void sizeAllocateImpl (core::Allocation *allocation);
    void resizeDrawImpl ();
 
-   bool getAdjustMinWidth () { return Table::adjustTableMinWidth; }
-
-   int getAvailWidthOfChild (Widget *child, bool forceValue);
-
-   void containerSizeChangedForChildren ();
-   bool affectsSizeChangeContainerChild (Widget *child);
-   bool usesAvailWidth ();
-
-   bool isBlockLevel ();
-
-   void drawLevel (core::View *view, core::Rectangle *area, int level,
-                   core::DrawingContext *context);
-
-   Widget *getWidgetAtPointLevel (int x, int y, int level,
-                                  core::GettingWidgetAtPointContext *context);
+   void setWidth (int width);
+   void setAscent (int ascent);
+   void setDescent (int descent);
+   void draw (core::View *view, core::Rectangle *area);
 
    //bool buttonPressImpl (core::EventButton *event);
    //bool buttonReleaseImpl (core::EventButton *event);
@@ -494,23 +471,14 @@ protected:
 public:
    static int CLASS_ID;
 
-   inline static void setAdjustTableMinWidth (bool adjustTableMinWidth)
-   { Table::adjustTableMinWidth = adjustTableMinWidth; }
-
-   inline static bool getAdjustTableMinWidth ()
-   { return Table::adjustTableMinWidth; }
-
    Table(bool limitTextWidth);
    ~Table();
-
-   int applyPerWidth (int containerWidth, core::style::Length perWidth);
-   int applyPerHeight (int containerHeight, core::style::Length perHeight);
 
    core::Iterator *iterator (core::Content::Type mask, bool atEnd);
 
    void addCell (Widget *widget, int colspan, int rowspan);
    void addRow (core::style::Style *style);
-   AlignedTableCell *getCellRef ();
+   TableCell *getCellRef ();
 };
 
 } // namespace dw

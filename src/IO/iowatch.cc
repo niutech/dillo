@@ -9,16 +9,14 @@
  * (at your option) any later version.
  */
 
-/** @file
- * Simple ADT for watching file descriptor activity
- */
+// Simple ADT for watching file descriptor activity
 
 #include <FL/Fl.H>
 #include "iowatch.hh"
 
-/**
- * Hook a Callback for a certain activities in a FD
- */
+//
+// Hook a Callback for a certain activities in a FD
+//
 void a_IOwatch_add_fd(int fd, int when, Fl_FD_Handler Callback,
                       void *usr_data = 0)
 {
@@ -26,9 +24,9 @@ void a_IOwatch_add_fd(int fd, int when, Fl_FD_Handler Callback,
       Fl::add_fd(fd, when, Callback, usr_data);
 }
 
-/**
- * Remove a Callback for a given FD (or just remove some events)
- */
+//
+// Remove a Callback for a given FD (or just remove some events)
+//
 void a_IOwatch_remove_fd(int fd, int when)
 {
    if (fd >= 0)

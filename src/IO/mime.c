@@ -2,7 +2,6 @@
  * File: mime.c
  *
  * Copyright (C) 2000-2007 Jorge Arellano Cid <jcid@dillo.org>
- * Copyright (C) 2024 Rodrigo Arias Mallo <rodarima@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,8 +29,8 @@ static int MimeMajItemsSize = 0, MimeMajItemsMax = 8;
 static MimeItem_t *MimeMajItems = NULL;
 
 
-/**
- * Add a specific MIME type (as "image/png") to our viewer list.
+/*
+ * Add a specific MIME type (as "image/png") to our viewer list
  * 'Key' is the content-type string that identifies the MIME type
  * 'Method' is the function that handles it
  */
@@ -44,8 +43,8 @@ static int Mime_add_minor_type(const char *Key, Viewer_t Method)
    return 0;
 }
 
-/**
- * Add a major MIME type (as "text") to our viewer list.
+/*
+ * Add a major MIME type (as "text") to our viewer list
  * 'Key' is the content-type string that identifies the MIME type
  * 'Method' is the function that handles it
  */
@@ -58,8 +57,8 @@ static int Mime_add_major_type(const char *Key, Viewer_t Method)
    return 0;
 }
 
-/**
- * Search the list of specific MIME viewers for a Method that matches 'Key'.
+/*
+ * Search the list of specific MIME viewers, for a Method that matches 'Key'
  * 'Key' is the content-type string that identifies the MIME type
  */
 static Viewer_t Mime_minor_type_fetch(const char *Key, uint_t Size)
@@ -68,14 +67,14 @@ static Viewer_t Mime_minor_type_fetch(const char *Key, uint_t Size)
 
    if (Size) {
       for ( i = 0; i < MimeMinItemsSize; ++i )
-         if (dStrnAsciiCasecmp(Key, MimeMinItems[i].Name, Size) == 0)
+         if (dStrncasecmp(Key, MimeMinItems[i].Name, Size) == 0)
             return MimeMinItems[i].Data;
    }
    return NULL;
 }
 
-/**
- * Search the list of major MIME viewers for a Method that matches 'Key'.
+/*
+ * Search the list of major MIME viewers, for a Method that matches 'Key'
  * 'Key' is the content-type string that identifies the MIME type
  */
 static Viewer_t Mime_major_type_fetch(const char *Key, uint_t Size)
@@ -84,17 +83,17 @@ static Viewer_t Mime_major_type_fetch(const char *Key, uint_t Size)
 
    if (Size) {
       for ( i = 0; i < MimeMajItemsSize; ++i )
-         if (dStrnAsciiCasecmp(Key, MimeMajItems[i].Name, Size) == 0)
+         if (dStrncasecmp(Key, MimeMajItems[i].Name, Size) == 0)
             return MimeMajItems[i].Data;
    }
    return NULL;
 }
 
 
-/**
+/*
  * Initializes Mime module and, sets the supported Mime types.
  */
-void a_Mime_init(void)
+void a_Mime_init()
 {
 #ifdef ENABLE_GIF
    Mime_add_minor_type("image/gif", a_Dicache_gif_image);
@@ -108,30 +107,25 @@ void a_Mime_init(void)
    Mime_add_minor_type("image/png", a_Dicache_png_image);
    Mime_add_minor_type("image/x-png", a_Dicache_png_image);    /* deprecated */
 #endif
-#ifdef ENABLE_WEBP
-   Mime_add_minor_type("image/webp", a_Dicache_webp_image);
-#endif
-#ifdef ENABLE_SVG
-   Mime_add_minor_type("image/svg+xml", a_Dicache_svg_image);
-#endif
    Mime_add_minor_type("text/html", a_Html_text);
    Mime_add_minor_type("application/xhtml+xml", a_Html_text);
-   Mime_add_minor_type("application/json", a_Plain_text);
 
    /* Add a major type to handle all the text stuff */
    Mime_add_major_type("text", a_Plain_text);
 }
 
 
-/**
- * Get the handler for the MIME type.
+/*
+ * Call the handler for the MIME type to set Call and Data as appropriate
  *
  * Return Value:
- *   On success: viewer
- *   On failure: NULL
+ *   On success: a new Dw (and Call and Data properly set).
+ *   On failure: NULL (and Call and Data untouched).
  */
-Viewer_t a_Mime_get_viewer(const char *content_type)
+void *a_Mime_set_viewer(const char *content_type, void *Ptr,
+                        CA_Callback_t *Call, void **Data)
 {
+
    Viewer_t viewer;
    uint_t MinSize, MajSize, i;
    const char *str = content_type;
@@ -143,9 +137,16 @@ Viewer_t a_Mime_get_viewer(const char *content_type)
    }
    MinSize = i;
 
+   /* Try minor type */
    viewer = Mime_minor_type_fetch(content_type, MinSize);
-   if (!viewer)
-      viewer = Mime_major_type_fetch(content_type, MajSize);
+   if (viewer)
+      return viewer(content_type, Ptr, Call, Data);
 
-   return viewer;
+   /* Try major type */
+   viewer = Mime_major_type_fetch(content_type, MajSize);
+   if (viewer)
+      return viewer(content_type, Ptr, Call, Data);
+
+   /* Type not handled */
+   return NULL;
 }
